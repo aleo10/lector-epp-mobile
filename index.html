@@ -48,6 +48,9 @@ const MODEL_URL = "models/yolox_ppe.onnx";
 const INPUT = 640;
 const CONF = 0.35, NMS = 0.45;
 const CLASSES = ["construction","Hardhat","Mask","NO-Hardhat","NO-Mask","NO-Safety Vest","Person","Safety Cone","Safety Vest","machinery","vehicle"];
+// Solo clases relevantes para EPP; se ignoran construction, Safety Cone, machinery y vehicle
+// (esas confunden autos/objetos y no aportan al analisis de EPP).
+const SHOW = new Set(["Person","Hardhat","NO-Hardhat","Mask","NO-Mask","Safety Vest","NO-Safety Vest"]);
 function colorFor(n){ if(["Hardhat","Mask","Safety Vest"].includes(n)) return "#16c60c";
   if(n.startsWith("NO-")) return "#ff2d2d"; if(n==="Person") return "#00b4ff"; return "#ffcc00"; }
 
@@ -140,6 +143,7 @@ function postprocess(out, r){
     for(let c=6;c<stride;c++){ if(d[o+c]>bestv){ bestv=d[o+c]; best=c; } }
     const score=obj*bestv;
     if(score<CONF) continue;
+    if(!SHOW.has(CLASSES[best-5])) continue; // descartar clases irrelevantes
     const cx=d[o],cy=d[o+1],w=d[o+2],h=d[o+3];
     boxes.push([(cx-w/2)/r,(cy-h/2)/r,(cx+w/2)/r,(cy+h/2)/r]);
     scores.push(score); clsIds.push(best-5);
