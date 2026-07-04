@@ -27,7 +27,13 @@
     background: #2563eb; color: #fff; font-weight: 700;
   }
   #status { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-    color: #fff; background: rgba(0,0,0,.6); padding: 8px 16px; border-radius: 8px; font-size: 14px; }
+    color: #fff; background: rgba(0,0,0,.6); padding: 8px 16px; border-radius: 8px; font-size: 14px;
+    max-width: 90%; text-align: center; }
+  #modebar { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; }
+  #modebar button { padding: 8px 18px; border: 2px solid #2563eb; border-radius: 20px;
+    background: rgba(0,0,0,.6); color: #fff; font-size: 14px; font-weight: 600; }
+  #modebar button.active { background: #2563eb; }
 </style>
 </head>
 <body>
@@ -39,6 +45,10 @@
     <div id="info">backend: <span id="backend">--</span><br>inf: <span id="inftime">--</span> ms<br>det: <span id="ndet">0</span></div>
   </div>
   <button id="start">Iniciar cámara</button>
+  <div id="modebar">
+    <button id="mode-local" class="active">📱 Celular</button>
+    <button id="mode-runpod">☁️ RunPod</button>
+  </div>
   <div id="status">Listo</div>
 </div>
 
@@ -59,10 +69,66 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const pre = document.createElement("canvas"); pre.width = INPUT; pre.height = INPUT;
 const pctx = pre.getContext("2d", { willReadFrequently: true });
+// canvas auxiliar para comprimir el frame a JPEG en modo RunPod
+const jpg = document.createElement("canvas");
+const jctx = jpg.getContext("2d");
 let session = null, running = false;
+let mode = "local";              // "local" | "runpod"
+let ws = null, wsReady = false;
+let remoteDets = [];             // ultimas detecciones recibidas del servidor
+let waitingReply = false;        // control de flujo: un frame en vuelo por vez
 
 const $ = id => document.getElementById(id);
 function setStatus(t){ $("status").textContent = t; }
+
+function getRunpodURL(){
+  let u = localStorage.getItem("runpod_url") || "";
+  u = prompt("URL del servidor RunPod (wss://...proxy.runpod.net):", u) || "";
+  u = u.trim();
+  if(u) localStorage.setItem("runpod_url", u);
+  return u;
+}
+
+function connectWS(url){
+  return new Promise((resolve, reject) => {
+    try { ws = new WebSocket(url); } catch(e){ return reject(e); }
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { wsReady = true; resolve(); };
+    ws.onerror = (e) => reject(new Error("no se pudo conectar"));
+    ws.onclose = () => { wsReady = false; };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        remoteDets = msg.dets || [];
+      } catch(e){}
+      waitingReply = false;
+    };
+  });
+}
+
+function setMode(m){
+  mode = m;
+  $("mode-local").classList.toggle("active", m === "local");
+  $("mode-runpod").classList.toggle("active", m === "runpod");
+}
+$("mode-local").addEventListener("click", () => {
+  setMode("local");
+  if(running) setStatus("Modo: procesando en el celular (WebGPU)");
+});
+$("mode-runpod").addEventListener("click", async () => {
+  const url = getRunpodURL();
+  if(!url){ return; }
+  setStatus("Conectando a RunPod...");
+  try {
+    await connectWS(url);
+    setMode("runpod");
+    $("backend").textContent = "runpod";
+    setStatus("Modo: procesando en RunPod (GPU)");
+  } catch(e){
+    setStatus("Error RunPod: " + e.message + " — sigo en modo celular");
+    setMode("local");
+  }
+});
 
 async function init(){
   const hasGPU = !!navigator.gpu;
@@ -160,19 +226,13 @@ function postprocess(out, r){
   return results;
 }
 
-let frames=0, lastT=performance.now(), fps=0;
-async function loop(){
-  if(!running) return;
-  const { tensor, r } = preprocess();
-  const t0=performance.now();
-  const out = await session.run({ [session.inputNames[0]]: tensor });
-  const t1=performance.now();
-  const dets = postprocess(out[session.outputNames[0]], r);
-
+const SEND_W = 960;  // ancho al que se manda el frame en modo RunPod
+function drawFrame(dets, scale){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
   ctx.lineWidth=3; ctx.font="18px sans-serif";
   for(const d of dets){
-    const [x1,y1,x2,y2]=d.box; const col=colorFor(d.cls);
+    const x1=d.box[0]*scale, y1=d.box[1]*scale, x2=d.box[2]*scale, y2=d.box[3]*scale;
+    const col=colorFor(d.cls);
     ctx.strokeStyle=col; ctx.strokeRect(x1,y1,x2-x1,y2-y1);
     ctx.fillStyle=col; const lbl=d.cls;
     const tw=ctx.measureText(lbl).width;
@@ -180,7 +240,35 @@ async function loop(){
     ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,y1-5);
   }
   $("ndet").textContent=dets.length;
-  $("inftime").textContent=(t1-t0).toFixed(0);
+}
+
+function sendFrameWS(){
+  const vw=video.videoWidth, vh=video.videoHeight;
+  const sh=Math.round(vh*SEND_W/vw);
+  jpg.width=SEND_W; jpg.height=sh;
+  jctx.drawImage(video,0,0,SEND_W,sh);
+  waitingReply=true;
+  jpg.toBlob(async(blob)=>{
+    if(blob && wsReady){ try { ws.send(await blob.arrayBuffer()); } catch(e){ waitingReply=false; } }
+    else waitingReply=false;
+  }, "image/jpeg", 0.6);
+}
+
+let frames=0, lastT=performance.now(), fps=0;
+async function loop(){
+  if(!running) return;
+  if(mode==="local"){
+    const { tensor, r } = preprocess();
+    const t0=performance.now();
+    const out = await session.run({ [session.inputNames[0]]: tensor });
+    const t1=performance.now();
+    const dets = postprocess(out[session.outputNames[0]], r);
+    drawFrame(dets, 1);
+    $("inftime").textContent=(t1-t0).toFixed(0);
+  } else {
+    if(wsReady && !waitingReply) sendFrameWS();
+    drawFrame(remoteDets, canvas.width/SEND_W);
+  }
 
   frames++;
   const now=performance.now();
