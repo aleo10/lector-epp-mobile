@@ -42,7 +42,7 @@
   <div id="status">Listo</div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
 <script>
 const MODEL_URL = "models/yolox_ppe.onnx";
 const INPUT = 640;
@@ -62,14 +62,27 @@ const $ = id => document.getElementById(id);
 function setStatus(t){ $("status").textContent = t; }
 
 async function init(){
-  setStatus("Cargando modelo (35 MB)...");
-  try {
-    session = await ort.InferenceSession.create(MODEL_URL, {
-      executionProviders: ["webgpu","wasm"], graphOptimizationLevel: "all"
-    });
-    $("backend").textContent = session.handler?._backendName || "webgpu/wasm";
-    setStatus("Modelo cargado. Iniciando cámara...");
-  } catch(e){ setStatus("Error modelo: " + e.message); throw e; }
+  const hasGPU = !!navigator.gpu;
+  setStatus("WebGPU en navegador: " + (hasGPU ? "SÍ" : "NO") + ". Cargando modelo (35 MB)...");
+  let backend = "wasm";
+  if(hasGPU){
+    try {
+      session = await ort.InferenceSession.create(MODEL_URL, {
+        executionProviders: ["webgpu"], graphOptimizationLevel: "all"
+      });
+      backend = "webgpu";
+    } catch(e){ console.warn("WebGPU falló:", e); }
+  }
+  if(!session){
+    try {
+      session = await ort.InferenceSession.create(MODEL_URL, {
+        executionProviders: ["wasm"], graphOptimizationLevel: "all"
+      });
+      backend = "wasm";
+    } catch(e){ setStatus("Error modelo: " + e.message); throw e; }
+  }
+  $("backend").textContent = backend;
+  setStatus("Modelo cargado (" + backend + "). Iniciando cámara...");
 
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "environment", width: {ideal:1280}, height: {ideal:720} }, audio: false
