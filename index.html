@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>EPP - Prueba de rendimiento</title>
+<title>Detector de EPP</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111827">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
@@ -61,8 +64,53 @@ const CLASSES = ["construction","Hardhat","Mask","NO-Hardhat","NO-Mask","NO-Safe
 // Solo clases relevantes para EPP; se ignoran construction, Safety Cone, machinery y vehicle
 // (esas confunden autos/objetos y no aportan al analisis de EPP).
 const SHOW = new Set(["Person","Hardhat","NO-Hardhat","Mask","NO-Mask","Safety Vest","NO-Safety Vest"]);
-function colorFor(n){ if(["Hardhat","Mask","Safety Vest"].includes(n)) return "#16c60c";
-  if(n.startsWith("NO-")) return "#ff2d2d"; if(n==="Person") return "#00b4ff"; return "#ffcc00"; }
+
+// ==== Logica EPP (misma que app.py del servidor) ====
+const REQUIRED = ["casco","chaleco"];   // EPP exigidos
+const CLASS_MAP = {                      // clase del modelo -> [epp, presente]
+  "Hardhat": ["casco", true],  "NO-Hardhat": ["casco", false],
+  "Safety Vest": ["chaleco", true], "NO-Safety Vest": ["chaleco", false],
+  "Mask": ["barbijo", true], "NO-Mask": ["barbijo", false],
+};
+const ST_COLOR = { cumple:"#16c60c", incumple:"#ff2d2d", verificando:"#ffb400" };
+
+function overlapRatio(inner, outer){
+  const x1=Math.max(inner[0],outer[0]), y1=Math.max(inner[1],outer[1]);
+  const x2=Math.min(inner[2],outer[2]), y2=Math.min(inner[3],outer[3]);
+  const iw=Math.max(0,x2-x1), ih=Math.max(0,y2-y1);
+  const areaIn=Math.max(1,(inner[2]-inner[0])*(inner[3]-inner[1]));
+  return (iw*ih)/areaIn;
+}
+
+// Asocia cada item de EPP a la persona que lo contiene y calcula su estado.
+function analyzeEPP(dets){
+  const people=[], items=[];
+  for(const d of dets){
+    if(d.cls==="Person") people.push({box:d.box, epp:{}});
+    else if(CLASS_MAP[d.cls]){
+      const [epp,present]=CLASS_MAP[d.cls];
+      items.push({box:d.box, epp, present, score:d.score});
+    }
+  }
+  for(const it of items){
+    let best=null, bestR=0.3;
+    for(const p of people){
+      const r=overlapRatio(it.box,p.box);
+      if(r>bestR){ best=p; bestR=r; }
+    }
+    if(best){
+      const prev=best.epp[it.epp];
+      if(!prev || it.score>prev.score) best.epp[it.epp]={present:it.present, score:it.score};
+    }
+  }
+  people.forEach((p,i)=>{
+    p.id=i+1;
+    p.missing=REQUIRED.filter(e=>p.epp[e] && p.epp[e].present===false);
+    p.unknown=REQUIRED.filter(e=>!(e in p.epp));
+    p.status=p.missing.length ? "incumple" : (p.unknown.length ? "verificando" : "cumple");
+  });
+  return { people, items };
+}
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -229,17 +277,33 @@ function postprocess(out, r){
 const SEND_W = 960;  // ancho al que se manda el frame en modo RunPod
 function drawFrame(dets, scale){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
-  ctx.lineWidth=3; ctx.font="18px sans-serif";
-  for(const d of dets){
-    const x1=d.box[0]*scale, y1=d.box[1]*scale, x2=d.box[2]*scale, y2=d.box[3]*scale;
-    const col=colorFor(d.cls);
-    ctx.strokeStyle=col; ctx.strokeRect(x1,y1,x2-x1,y2-y1);
-    ctx.fillStyle=col; const lbl=d.cls;
-    const tw=ctx.measureText(lbl).width;
-    ctx.fillRect(x1,y1-22,tw+8,22);
-    ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,y1-5);
+  const { people, items } = analyzeEPP(dets);
+
+  // Items de EPP: caja fina (celeste presente / rojo ausente)
+  ctx.lineWidth=2;
+  for(const it of items){
+    ctx.strokeStyle = it.present ? "#00b4ff" : "#ff2d2d";
+    ctx.strokeRect(it.box[0]*scale, it.box[1]*scale,
+                   (it.box[2]-it.box[0])*scale, (it.box[3]-it.box[1])*scale);
   }
-  $("ndet").textContent=dets.length;
+
+  // Personas: caja gruesa segun estado + etiqueta
+  ctx.font="bold 20px sans-serif"; ctx.lineWidth=4;
+  for(const p of people){
+    const x1=p.box[0]*scale, y1=p.box[1]*scale;
+    const w=(p.box[2]-p.box[0])*scale, h=(p.box[3]-p.box[1])*scale;
+    const col=ST_COLOR[p.status];
+    ctx.strokeStyle=col; ctx.strokeRect(x1,y1,w,h);
+    let lbl;
+    if(p.status==="incumple") lbl=`#${p.id} SIN ${p.missing.join("/").toUpperCase()}`;
+    else if(p.status==="verificando") lbl=`#${p.id} verificando...`;
+    else lbl=`#${p.id} EPP OK`;
+    const tw=ctx.measureText(lbl).width;
+    const ty=Math.max(y1-26,0);
+    ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26);
+    ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,ty+19);
+  }
+  $("ndet").textContent=people.length;
 }
 
 function sendFrameWS(){
@@ -281,6 +345,11 @@ $("start").addEventListener("click", async ()=>{
   $("start").style.display="none";
   try { await init(); } catch(e){ setStatus("Error: "+e.message); $("start").style.display="block"; }
 });
+
+// PWA: registrar service worker (cachea app + modelo para uso offline)
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
 </script>
 </body>
 </html>

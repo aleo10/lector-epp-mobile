@@ -1,0 +1,14 @@
+{
+  "name": "Detector de EPP",
+  "short_name": "EPP",
+  "description": "Deteccion de Elementos de Proteccion Personal en tiempo real",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#111827",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
