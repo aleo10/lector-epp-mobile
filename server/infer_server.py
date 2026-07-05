@@ -13,12 +13,17 @@ Esa URL es la que se pega en la PWA (modo RunPod).
 """
 import asyncio
 import json
+import os
+# Importar torch antes que onnxruntime inicializa el contexto CUDA con las libs
+# del template (evita el "CUDA failure 999" al crear el CUDAExecutionProvider).
+try:
+    import torch  # noqa: F401
+except Exception:
+    pass
 import cv2
 import numpy as np
 import onnxruntime as ort
 import websockets
-
-import os
 
 # Configurables por entorno: el modo RunPod usa el modelo grande a 1280.
 MODEL_PATH = os.environ.get("MODEL_PATH", "yolox_ppe_1280.onnx")
