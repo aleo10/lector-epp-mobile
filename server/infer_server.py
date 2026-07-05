@@ -18,11 +18,14 @@ import numpy as np
 import onnxruntime as ort
 import websockets
 
-MODEL_PATH = "yolox_ppe.onnx"
-INPUT_SIZE = 640
-CONF_THRES = 0.35
+import os
+
+# Configurables por entorno: el modo RunPod usa el modelo grande a 1280.
+MODEL_PATH = os.environ.get("MODEL_PATH", "yolox_ppe_1280.onnx")
+INPUT_SIZE = int(os.environ.get("INPUT_SIZE", "1280"))
+CONF_THRES = float(os.environ.get("CONF", "0.35"))
 NMS_THRES = 0.45
-PORT = 8765
+PORT = int(os.environ.get("PORT", "8765"))
 
 CLASSES = ["construction", "Hardhat", "Mask", "NO-Hardhat", "NO-Mask",
            "NO-Safety Vest", "Person", "Safety Cone", "Safety Vest",
