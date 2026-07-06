@@ -8,8 +8,12 @@
 set -e
 cd /workspace
 
-# 1) Codigo + modelo (idempotente)
-[ -d app ] || git clone -q https://github.com/aleo10/lector-epp-mobile.git app
+# 1) Codigo + modelo (idempotente; actualiza si ya existe)
+if [ -d app ]; then
+  git -C app pull -q || true
+else
+  git clone -q https://github.com/aleo10/lector-epp-mobile.git app
+fi
 cd app/server
 [ -f yolox_ppe_1280.onnx ] || wget -q \
   https://github.com/aleo10/lector-epp-mobile/releases/download/modelos-v1/yolox_ppe_1280.onnx \

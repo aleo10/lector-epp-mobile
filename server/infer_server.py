@@ -46,6 +46,13 @@ session = ort.InferenceSession(MODEL_PATH, providers=providers)
 input_name = session.get_inputs()[0].name
 print(f"Modelo cargado. Providers: {session.get_providers()}")
 
+# Warmup: la primera inferencia compila/carga los kernels CUDA (~varios segundos).
+# Lo hacemos al arrancar para que el primer frame del cliente no cuelgue en la demo.
+_dummy = np.zeros((1, 3, INPUT_SIZE, INPUT_SIZE), dtype=np.float32)
+for _ in range(3):
+    session.run(None, {input_name: _dummy})
+print("Warmup completo, GPU lista.")
+
 
 def preprocess(img):
     h, w = img.shape[:2]
