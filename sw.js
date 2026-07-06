@@ -1,5 +1,6 @@
-// Service worker: cachea la app y el modelo para funcionar offline.
-const CACHE = "epp-v1";
+// Service worker: cachea la app y el modelo para funcionar offline,
+// pero prioriza traer el codigo actualizado cuando hay conexion.
+const CACHE = "epp-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,22 +24,34 @@ self.addEventListener("activate", (e) => {
   self.clients.claim();
 });
 
-// Cache-first con actualizacion en segundo plano para todo lo GET.
-// Los WebSocket no pasan por aca, asi que el modo RunPod no se ve afectado.
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
-  e.respondWith(
-    caches.match(e.request).then((hit) => {
-      const fetching = fetch(e.request)
-        .then((res) => {
-          if (res && res.status === 200) {
-            const clone = res.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, clone));
-          }
+
+  // El modelo (grande, no cambia): cache-first para no re-descargar 35 MB.
+  if (e.request.url.includes(".onnx")) {
+    e.respondWith(
+      caches.match(e.request).then((hit) =>
+        hit || fetch(e.request).then((res) => {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, clone));
           return res;
         })
-        .catch(() => hit);
-      return hit || fetching;
-    })
+      )
+    );
+    return;
+  }
+
+  // Codigo/assets: network-first => siempre lo ultimo si hay red,
+  // con fallback al cache si no hay conexion (offline).
+  e.respondWith(
+    fetch(e.request)
+      .then((res) => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, clone));
+        }
+        return res;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
