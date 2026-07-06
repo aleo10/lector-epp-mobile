@@ -209,8 +209,27 @@ async function init(){
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   setStatus("Corriendo");
   running = true;
+  acquireWakeLock();   // mantener la pantalla encendida durante la deteccion
   loop();
 }
+
+// Wake Lock: evita que el celular apague/bloquee la pantalla por inactividad
+// mientras la camara esta corriendo (el sistema no cuenta el video como "uso").
+let wakeLock = null;
+async function acquireWakeLock(){
+  try {
+    if ("wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => {});
+    }
+  } catch(e){ /* algunos navegadores lo bloquean con bateria baja */ }
+}
+// El wake lock se suelta solo al pasar la app a segundo plano; re-adquirir al volver.
+document.addEventListener("visibilitychange", () => {
+  if (running && wakeLock !== null && document.visibilityState === "visible") {
+    acquireWakeLock();
+  }
+});
 
 function preprocess(){
   const vw = video.videoWidth, vh = video.videoHeight;
