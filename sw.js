@@ -1,6 +1,6 @@
 // Service worker: cachea la app y el modelo para funcionar offline,
 // pero prioriza traer el codigo actualizado cuando hay conexion.
-const CACHE = "epp-v2";
+const CACHE = "epp-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -27,8 +27,14 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
 
+  // Nunca interceptar la API/streams del relay de la camara IP (video en vivo,
+  // detecciones, estado): son datos vivos, muchas veces cross-origin (Tailscale).
+  const url = e.request.url;
+  if (url.includes("/video_feed") || url.includes("/detections") ||
+      url.includes("/status") || url.includes("/ip/")) return;
+
   // El modelo (grande, no cambia): cache-first para no re-descargar 35 MB.
-  if (e.request.url.includes(".onnx")) {
+  if (url.includes(".onnx")) {
     e.respondWith(
       caches.match(e.request).then((hit) =>
         hit || fetch(e.request).then((res) => {

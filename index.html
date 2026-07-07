@@ -3,372 +3,338 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Detector de EPP</title>
-<link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Detector de EPP</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: #000; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-  #wrap { position: relative; width: 100vw; height: 100vh; }
-  #video { display: none; }
-  #canvas { width: 100%; height: 100%; object-fit: cover; }
-  #hud {
-    position: absolute; top: 8px; left: 8px; right: 8px;
-    display: flex; justify-content: space-between; align-items: flex-start;
-    color: #fff; font-size: 14px; pointer-events: none;
-  }
-  #fps {
-    background: rgba(0,0,0,.6); padding: 8px 12px; border-radius: 8px;
-    font-size: 22px; font-weight: 700;
-  }
-  #fps b { color: #4ade80; }
-  #info { background: rgba(0,0,0,.6); padding: 8px 12px; border-radius: 8px; text-align: right; line-height: 1.5; }
-  #start {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
-    padding: 18px 36px; font-size: 20px; border: none; border-radius: 12px;
-    background: #2563eb; color: #fff; font-weight: 700;
-  }
-  #status { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-    color: #fff; background: rgba(0,0,0,.6); padding: 8px 16px; border-radius: 8px; font-size: 14px;
-    max-width: 90%; text-align: center; }
-  #modebar { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%);
-    display: flex; gap: 8px; }
-  #modebar button { padding: 8px 18px; border: 2px solid #2563eb; border-radius: 20px;
-    background: rgba(0,0,0,.6); color: #fff; font-size: 14px; font-weight: 600; }
-  #modebar button.active { background: #2563eb; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0b1220; color:#e5e7eb; font-family:'Segoe UI',sans-serif; min-height:100vh; }
+  header { padding:10px 14px; }
+  h1 { font-size:1.15rem; margin-bottom:8px; } h1 span{ color:#fbbf24; }
+  .selectors { display:flex; flex-wrap:wrap; gap:14px; align-items:center; }
+  .group { display:flex; align-items:center; gap:6px; }
+  .group .lbl { font-size:.75rem; color:#9ca3af; margin-right:2px; }
+  .btn { padding:7px 14px; border:2px solid #2563eb; border-radius:20px; background:#0b1220;
+         color:#fff; font-size:.85rem; font-weight:600; cursor:pointer; }
+  .btn.active { background:#2563eb; }
+  .btn.primary { border-color:#16a34a; } .btn.primary.on { background:#16a34a; }
+  .layout { display:flex; gap:14px; flex-wrap:wrap; padding:0 14px 14px; }
+  .stage { flex:2; min-width:320px; position:relative; background:#000; border-radius:10px; overflow:hidden; }
+  #canvas, #ipimg { width:100%; display:block; max-height:78vh; object-fit:contain; background:#000; }
+  #video { display:none; }
+  #hud { position:absolute; top:8px; left:8px; right:8px; display:flex; justify-content:space-between;
+         color:#fff; font-size:13px; pointer-events:none; }
+  #fps { background:rgba(0,0,0,.6); padding:6px 10px; border-radius:8px; font-size:18px; font-weight:700; }
+  #fps b { color:#4ade80; }
+  #infobox { background:rgba(0,0,0,.6); padding:6px 10px; border-radius:8px; text-align:right; line-height:1.4; }
+  .panel { flex:1; min-width:240px; }
+  #status { font-size:.8rem; color:#9ca3af; margin:6px 0 10px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#ef4444; margin-right:6px; }
+  .dot.on { background:#22c55e; }
+  .card { background:#1f2937; border-radius:8px; padding:10px 12px; margin-bottom:8px; border-left:6px solid #6b7280; }
+  .card.cumple{ border-left-color:#22c55e; } .card.incumple{ border-left-color:#ef4444; } .card.verificando{ border-left-color:#f59e0b; }
+  .card .title { font-weight:600; margin-bottom:5px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:.75rem; margin:2px 4px 2px 0; }
+  .badge.ok{ background:#14532d; color:#86efac; } .badge.bad{ background:#7f1d1d; color:#fca5a5; } .badge.unk{ background:#78350f; color:#fcd34d; }
+  .empty { color:#9ca3af; font-style:italic; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <video id="video" playsinline muted></video>
-  <canvas id="canvas"></canvas>
-  <div id="hud">
-    <div id="fps"><b>--</b> FPS</div>
-    <div id="info">backend: <span id="backend">--</span><br>inf: <span id="inftime">--</span> ms<br>det: <span id="ndet">0</span></div>
+<header>
+  <h1>&#9937; Detector de <span>EPP</span></h1>
+  <div class="selectors">
+    <div class="group">
+      <span class="lbl">Fuente</span>
+      <button class="btn active" id="src-phone">📱 Celular</button>
+      <button class="btn" id="src-ip">📹 Cámara IP</button>
+    </div>
+    <div class="group" id="procGroup">
+      <span class="lbl">Procesar en</span>
+      <button class="btn active" id="proc-local">📱 Celular</button>
+      <button class="btn" id="proc-runpod">☁️ RunPod</button>
+    </div>
+    <div class="group" id="ipProcNote" style="display:none">
+      <span class="lbl">Procesar en</span><span class="btn active" style="cursor:default">☁️ RunPod</span>
+    </div>
+    <button class="btn primary" id="startbtn">▶ Iniciar</button>
   </div>
-  <button id="start">Iniciar cámara</button>
-  <div id="modebar">
-    <button id="mode-local" class="active">📱 Celular</button>
-    <button id="mode-runpod">☁️ RunPod</button>
+</header>
+
+<div class="layout">
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <img id="ipimg" alt="Cámara IP" style="display:none">
+    <div id="hud" style="display:none">
+      <div id="fps"><b>--</b> FPS</div>
+      <div id="infobox">backend: <span id="backend">--</span><br>inf: <span id="inftime">--</span> ms<br>det: <span id="ndet">0</span></div>
+    </div>
   </div>
-  <div id="status">Listo</div>
+  <div class="panel">
+    <div id="status"><span class="dot" id="dot"></span><span id="statustext">Listo. Elegí fuente y tocá Iniciar.</span></div>
+    <div id="detpanel" class="empty">Sin personas detectadas</div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
 <script>
-const MODEL_URL = "models/yolox_ppe.onnx";
-const INPUT = 640;
-const CONF = 0.35, NMS = 0.45;
+const $ = id => document.getElementById(id);
+const NAMES = { casco:"Casco", chaleco:"Chaleco", barbijo:"Barbijo" };
+
+// ==== config modelo (modo celular local) ====
+const MODEL_URL = "models/yolox_ppe.onnx";   // relativo: sirve en GitHub Pages y en el relay
+const INPUT = 640, CONF = 0.35, NMS = 0.45;
 const CLASSES = ["construction","Hardhat","Mask","NO-Hardhat","NO-Mask","NO-Safety Vest","Person","Safety Cone","Safety Vest","machinery","vehicle"];
-// Solo clases relevantes para EPP; se ignoran construction, Safety Cone, machinery y vehicle
-// (esas confunden autos/objetos y no aportan al analisis de EPP).
 const SHOW = new Set(["Person","Hardhat","NO-Hardhat","Mask","NO-Mask","Safety Vest","NO-Safety Vest"]);
 
-// ==== Logica EPP (misma que app.py del servidor) ====
-const REQUIRED = ["casco","chaleco"];   // EPP exigidos
-const CLASS_MAP = {                      // clase del modelo -> [epp, presente]
-  "Hardhat": ["casco", true],  "NO-Hardhat": ["casco", false],
-  "Safety Vest": ["chaleco", true], "NO-Safety Vest": ["chaleco", false],
-  "Mask": ["barbijo", true], "NO-Mask": ["barbijo", false],
-};
+// ==== logica EPP (misma que el servidor) ====
+const REQUIRED = ["casco","chaleco"];
+const CLASS_MAP = { "Hardhat":["casco",true],"NO-Hardhat":["casco",false],
+  "Safety Vest":["chaleco",true],"NO-Safety Vest":["chaleco",false],
+  "Mask":["barbijo",true],"NO-Mask":["barbijo",false] };
 const ST_COLOR = { cumple:"#16c60c", incumple:"#ff2d2d", verificando:"#ffb400" };
 
-function overlapRatio(inner, outer){
-  const x1=Math.max(inner[0],outer[0]), y1=Math.max(inner[1],outer[1]);
-  const x2=Math.min(inner[2],outer[2]), y2=Math.min(inner[3],outer[3]);
-  const iw=Math.max(0,x2-x1), ih=Math.max(0,y2-y1);
-  const areaIn=Math.max(1,(inner[2]-inner[0])*(inner[3]-inner[1]));
-  return (iw*ih)/areaIn;
+function overlapRatio(inner,outer){
+  const x1=Math.max(inner[0],outer[0]),y1=Math.max(inner[1],outer[1]);
+  const x2=Math.min(inner[2],outer[2]),y2=Math.min(inner[3],outer[3]);
+  const iw=Math.max(0,x2-x1),ih=Math.max(0,y2-y1);
+  return (iw*ih)/Math.max(1,(inner[2]-inner[0])*(inner[3]-inner[1]));
 }
-
-// Asocia cada item de EPP a la persona que lo contiene y calcula su estado.
 function analyzeEPP(dets){
-  const people=[], items=[];
+  const people=[],items=[];
   for(const d of dets){
-    if(d.cls==="Person") people.push({box:d.box, epp:{}});
-    else if(CLASS_MAP[d.cls]){
-      const [epp,present]=CLASS_MAP[d.cls];
-      items.push({box:d.box, epp, present, score:d.score});
-    }
+    if(d.cls==="Person") people.push({box:d.box,epp:{}});
+    else if(CLASS_MAP[d.cls]){ const [e,pr]=CLASS_MAP[d.cls]; items.push({box:d.box,epp:e,present:pr,score:d.score}); }
   }
-  for(const it of items){
-    let best=null, bestR=0.3;
-    for(const p of people){
-      const r=overlapRatio(it.box,p.box);
-      if(r>bestR){ best=p; bestR=r; }
-    }
-    if(best){
-      const prev=best.epp[it.epp];
-      if(!prev || it.score>prev.score) best.epp[it.epp]={present:it.present, score:it.score};
-    }
+  for(const it of items){ let best=null,bR=0.3;
+    for(const p of people){ const r=overlapRatio(it.box,p.box); if(r>bR){best=p;bR=r;} }
+    if(best){ const pv=best.epp[it.epp]; if(!pv||it.score>pv.score) best.epp[it.epp]={present:it.present,score:it.score}; }
   }
-  people.forEach((p,i)=>{
-    p.id=i+1;
-    p.missing=REQUIRED.filter(e=>p.epp[e] && p.epp[e].present===false);
+  people.forEach((p,i)=>{ p.id=i+1;
+    p.missing=REQUIRED.filter(e=>p.epp[e]&&p.epp[e].present===false);
     p.unknown=REQUIRED.filter(e=>!(e in p.epp));
-    p.status=p.missing.length ? "incumple" : (p.unknown.length ? "verificando" : "cumple");
-  });
-  return { people, items };
+    p.status=p.missing.length?"incumple":(p.unknown.length?"verificando":"cumple"); });
+  return {people,items};
 }
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const pre = document.createElement("canvas"); pre.width = INPUT; pre.height = INPUT;
-const pctx = pre.getContext("2d", { willReadFrequently: true });
-// canvas auxiliar para comprimir el frame a JPEG en modo RunPod
-const jpg = document.createElement("canvas");
-const jctx = jpg.getContext("2d");
-let session = null, running = false;
-let mode = "local";              // "local" | "runpod"
-let ws = null, wsReady = false;
-let remoteDets = [];             // ultimas detecciones recibidas del servidor
-let waitingReply = false;        // control de flujo: un frame en vuelo por vez
+// ==== elementos ====
+const video=$("video"), canvas=$("canvas"), ctx=canvas.getContext("2d");
+const pre=document.createElement("canvas"); pre.width=INPUT; pre.height=INPUT;
+const pctx=pre.getContext("2d",{willReadFrequently:true});
+const jpg=document.createElement("canvas"), jctx=jpg.getContext("2d");
+const SEND_W=960;
 
-const $ = id => document.getElementById(id);
-function setStatus(t){ $("status").textContent = t; }
+// ==== estado ====
+let source="phone", procMode="local";
+let session=null, running=false;
+let ws=null, wsReady=false, remoteDets=[], waitingReply=false;
+let ipTimer=null, RELAY_BASE="";     // base del relay para modo IP ("" = mismo origen)
 
-function getRunpodURL(){
-  let u = localStorage.getItem("runpod_url") || "";
-  u = prompt("URL del servidor RunPod (wss://...proxy.runpod.net):", u) || "";
-  u = u.trim();
-  if(u) localStorage.setItem("runpod_url", u);
+function setStatus(t){ $("statustext").textContent=t; }
+
+// ==== URL de RunPod (compartida celular+IP, guardada en el navegador) ====
+function getRunpodURL(force){
+  let u=localStorage.getItem("runpod_url")||"";
+  if(force || !u){ u=(prompt("URL del servidor RunPod (wss://...proxy.runpod.net):",u)||"").trim();
+    if(u) localStorage.setItem("runpod_url",u); }
   return u;
 }
-
+// ==== base del relay para el modo cámara IP ====
+// Si esta misma página la sirve el relay (localhost o Tailscale), usa mismo origen.
+// Si viene de GitHub Pages, pide/usa la URL del relay (https://<pc>.ts.net).
+async function resolveRelayBase(){
+  try{ const r=await fetch("status",{cache:"no-store"}); if(r.ok){ await r.json(); return ""; } }catch(e){}
+  let u=localStorage.getItem("relay_url")||"";
+  if(!u){ u=(prompt("URL del relay de la cámara IP (https://<tu-pc>.ts.net):",u)||"").trim();
+    if(u) localStorage.setItem("relay_url",u.replace(/\/$/,"")); u=localStorage.getItem("relay_url")||""; }
+  return u.replace(/\/$/,"");
+}
 function connectWS(url){
-  return new Promise((resolve, reject) => {
-    try { ws = new WebSocket(url); } catch(e){ return reject(e); }
-    ws.binaryType = "arraybuffer";
-    ws.onopen = () => { wsReady = true; resolve(); };
-    ws.onerror = (e) => reject(new Error("no se pudo conectar"));
-    ws.onclose = () => { wsReady = false; };
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        remoteDets = msg.dets || [];
-      } catch(e){}
-      waitingReply = false;
-    };
+  return new Promise((resolve,reject)=>{
+    try{ ws=new WebSocket(url);}catch(e){return reject(e);}
+    ws.binaryType="arraybuffer";
+    ws.onopen=()=>{wsReady=true;resolve();};
+    ws.onerror=()=>reject(new Error("no se pudo conectar"));
+    ws.onclose=()=>{wsReady=false;};
+    ws.onmessage=(ev)=>{ try{ remoteDets=(JSON.parse(ev.data).dets)||[]; }catch(e){} waitingReply=false; };
   });
 }
 
-function setMode(m){
-  mode = m;
-  $("mode-local").classList.toggle("active", m === "local");
-  $("mode-runpod").classList.toggle("active", m === "runpod");
+// ==== selectores ====
+function setSource(s){
+  if(s===source) return;
+  stopAll();
+  source=s;
+  $("src-phone").classList.toggle("active",s==="phone");
+  $("src-ip").classList.toggle("active",s==="ip");
+  $("procGroup").style.display = s==="phone" ? "flex" : "none";
+  $("ipProcNote").style.display = s==="ip" ? "flex" : "none";
+  $("canvas").style.display = s==="phone" ? "block" : "none";
+  $("hud").style.display    = s==="phone" ? "flex" : "none";
+  $("ipimg").style.display  = s==="ip" ? "block" : "none";
+  setStatus(s==="phone" ? "Fuente celular. Tocá Iniciar." : "Fuente cámara IP (→ RunPod). Tocá Iniciar.");
+  $("detpanel").innerHTML='<div class="empty">Sin personas detectadas</div>';
 }
-$("mode-local").addEventListener("click", () => {
-  setMode("local");
-  if(running) setStatus("Modo: procesando en el celular (WebGPU)");
-});
-$("mode-runpod").addEventListener("click", async () => {
-  const url = getRunpodURL();
-  if(!url){ return; }
+function setProc(m){
+  procMode=m;
+  $("proc-local").classList.toggle("active",m==="local");
+  $("proc-runpod").classList.toggle("active",m==="runpod");
+}
+$("src-phone").onclick=()=>setSource("phone");
+$("src-ip").onclick=()=>setSource("ip");
+$("proc-local").onclick=()=>{ setProc("local"); if(running) setStatus("Procesando en el celular (WebGPU)"); };
+$("proc-runpod").onclick=async()=>{
+  const url=getRunpodURL(); if(!url) return;
   setStatus("Conectando a RunPod...");
-  try {
-    await connectWS(url);
-    setMode("runpod");
-    $("backend").textContent = "runpod";
-    setStatus("Modo: procesando en RunPod (GPU)");
-  } catch(e){
-    setStatus("Error RunPod: " + e.message + " — sigo en modo celular");
-    setMode("local");
-  }
-});
+  try{ if(!wsReady) await connectWS(url); setProc("runpod"); $("backend").textContent="runpod"; setStatus("Procesando en RunPod (GPU)"); }
+  catch(e){ setStatus("Error RunPod: "+e.message+" — sigo en celular"); setProc("local"); }
+};
 
-async function init(){
-  const hasGPU = !!navigator.gpu;
-  setStatus("WebGPU en navegador: " + (hasGPU ? "SÍ" : "NO") + ". Cargando modelo (35 MB)...");
-  let backend = "wasm";
-  if(hasGPU){
-    try {
-      session = await ort.InferenceSession.create(MODEL_URL, {
-        executionProviders: ["webgpu"], graphOptimizationLevel: "all"
-      });
-      backend = "webgpu";
-    } catch(e){ console.warn("WebGPU falló:", e); }
-  }
-  if(!session){
-    try {
-      session = await ort.InferenceSession.create(MODEL_URL, {
-        executionProviders: ["wasm"], graphOptimizationLevel: "all"
-      });
-      backend = "wasm";
-    } catch(e){ setStatus("Error modelo: " + e.message); throw e; }
-  }
-  $("backend").textContent = backend;
-  setStatus("Modelo cargado (" + backend + "). Iniciando cámara...");
+// ==== iniciar / detener ====
+$("startbtn").onclick=async()=>{
+  if(running || ipTimer){ stopAll(); return; }
+  if(source==="phone") await startPhone(); else await startIP();
+};
+function updateBtn(on){ const b=$("startbtn"); b.textContent=on?"■ Detener":"▶ Iniciar"; b.classList.toggle("on",on); }
+function stopAll(){ stopPhone(); stopIP(); updateBtn(false); }
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment", width: {ideal:1280}, height: {ideal:720} }, audio: false
-  });
-  video.srcObject = stream;
-  await video.play();
-  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-  setStatus("Corriendo");
-  running = true;
-  acquireWakeLock();   // mantener la pantalla encendida durante la deteccion
-  loop();
+// ---- celular ----
+async function ensureModel(){
+  if(session) return $("backend").textContent;
+  setStatus("Cargando modelo (35 MB)...");
+  let backend="wasm";
+  if(navigator.gpu){ try{ session=await ort.InferenceSession.create(MODEL_URL,{executionProviders:["webgpu"],graphOptimizationLevel:"all"}); backend="webgpu"; }catch(e){ console.warn(e);} }
+  if(!session){ session=await ort.InferenceSession.create(MODEL_URL,{executionProviders:["wasm"],graphOptimizationLevel:"all"}); backend="wasm"; }
+  $("backend").textContent = procMode==="runpod" ? "runpod" : backend;
+  return backend;
+}
+async function startPhone(){
+  try{
+    if(procMode==="runpod"){ const url=getRunpodURL(); if(!url){ setStatus("Falta URL de RunPod"); return; } if(!wsReady) await connectWS(url); $("backend").textContent="runpod"; }
+    else { await ensureModel(); }
+    setStatus("Iniciando cámara del celular...");
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject=stream; await video.play();
+    canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+    running=true; updateBtn(true); acquireWakeLock();
+    setStatus(procMode==="runpod"?"Procesando en RunPod (GPU)":"Procesando en el celular");
+    loop();
+  }catch(e){ setStatus("Error: "+e.message); running=false; updateBtn(false); }
+}
+function stopPhone(){
+  running=false;
+  if(video.srcObject){ video.srcObject.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+  $("dot").classList.remove("on");
 }
 
-// Wake Lock: evita que el celular apague/bloquee la pantalla por inactividad
-// mientras la camara esta corriendo (el sistema no cuenta el video como "uso").
-let wakeLock = null;
-async function acquireWakeLock(){
-  try {
-    if ("wakeLock" in navigator) {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeLock.addEventListener("release", () => {});
-    }
-  } catch(e){ /* algunos navegadores lo bloquean con bateria baja */ }
+// ---- camara IP (via relay) ----
+async function startIP(){
+  const url=getRunpodURL(); if(!url){ setStatus("Falta URL de RunPod (la cámara IP procesa en RunPod)"); return; }
+  setStatus("Buscando el relay de la cámara IP...");
+  RELAY_BASE=await resolveRelayBase();
+  setStatus("Iniciando cámara IP → RunPod...");
+  try{
+    const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runpod_url:url})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+  }catch(e){ setStatus("No se pudo iniciar el relay: "+e.message+". ¿La URL del relay es correcta y está corriendo?"); return; }
+  $("ipimg").src=RELAY_BASE+"/video_feed?t="+Date.now();
+  updateBtn(true);
+  ipTimer=setInterval(pollIP,600); pollIP();
 }
-// El wake lock se suelta solo al pasar la app a segundo plano; re-adquirir al volver.
-document.addEventListener("visibilitychange", () => {
-  if (running && wakeLock !== null && document.visibilityState === "visible") {
-    acquireWakeLock();
-  }
-});
+function stopIP(){
+  if(ipTimer){ clearInterval(ipTimer); ipTimer=null; }
+  fetch(RELAY_BASE+"/ip/stop",{method:"POST"}).catch(()=>{});
+  $("ipimg").removeAttribute("src");
+  $("dot").classList.remove("on");
+}
+async function pollIP(){
+  try{
+    const s=await (await fetch(RELAY_BASE+"/status",{cache:"no-store"})).json();
+    $("dot").classList.toggle("on",!!s.conn);
+    setStatus("Cámara IP → RunPod · "+(s.conn?"conectado":"sin conexión")+" · "+(s.fps||0)+" FPS · "+(s.text||""));
+    renderPanel(await (await fetch(RELAY_BASE+"/detections",{cache:"no-store"})).json());
+  }catch(e){ setStatus("Sin respuesta del relay..."); }
+}
 
+// ==== panel de detecciones (compartido) ====
+function renderPanel(people){
+  const el=$("detpanel");
+  if(!people||!people.length){ el.innerHTML='<div class="empty">Sin personas detectadas</div>'; return; }
+  el.innerHTML=people.map(p=>{
+    const badges=Object.entries(p.epp||{}).map(([k,v])=>`<span class="badge ${v?"ok":"bad"}">${NAMES[k]||k}: ${v?"SI":"NO"}</span>`).join("");
+    const unk=(p.unknown||[]).map(k=>`<span class="badge unk">${NAMES[k]||k}: ?</span>`).join("");
+    const icon=p.status==="cumple"?"✅":p.status==="incumple"?"❌":"⏳";
+    return `<div class="card ${p.status}"><div class="title">${icon} Persona #${p.id} — ${p.status.toUpperCase()}</div>${badges}${unk}</div>`;
+  }).join("");
+}
+
+// ==== wake lock (celular) ====
+let wakeLock=null;
+async function acquireWakeLock(){ try{ if("wakeLock" in navigator){ wakeLock=await navigator.wakeLock.request("screen"); } }catch(e){} }
+document.addEventListener("visibilitychange",()=>{ if(running&&wakeLock&&document.visibilityState==="visible") acquireWakeLock(); });
+
+// ==== inferencia local (celular) ====
 function preprocess(){
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const r = Math.min(INPUT/vw, INPUT/vh);
-  const nw = Math.round(vw*r), nh = Math.round(vh*r);
-  pctx.fillStyle = "rgb(114,114,114)"; pctx.fillRect(0,0,INPUT,INPUT);
-  pctx.drawImage(video, 0,0, nw, nh);
-  const data = pctx.getImageData(0,0,INPUT,INPUT).data;
-  const arr = new Float32Array(INPUT*INPUT*3);
-  const area = INPUT*INPUT;
-  for(let i=0;i<area;i++){
-    const j=i*4;
-    arr[i]         = data[j+2]; // B
-    arr[area+i]    = data[j+1]; // G
-    arr[2*area+i]  = data[j];   // R
-  }
-  return { tensor: new ort.Tensor("float32", arr, [1,3,INPUT,INPUT]), r };
+  const vw=video.videoWidth,vh=video.videoHeight,r=Math.min(INPUT/vw,INPUT/vh);
+  const nw=Math.round(vw*r),nh=Math.round(vh*r);
+  pctx.fillStyle="rgb(114,114,114)"; pctx.fillRect(0,0,INPUT,INPUT); pctx.drawImage(video,0,0,nw,nh);
+  const data=pctx.getImageData(0,0,INPUT,INPUT).data, arr=new Float32Array(INPUT*INPUT*3), area=INPUT*INPUT;
+  for(let i=0;i<area;i++){ const j=i*4; arr[i]=data[j+2]; arr[area+i]=data[j+1]; arr[2*area+i]=data[j]; }
+  return {tensor:new ort.Tensor("float32",arr,[1,3,INPUT,INPUT]),r};
 }
-
-function nms(boxes, scores, thr){
-  const idx = scores.map((s,i)=>i).sort((a,b)=>scores[b]-scores[a]);
-  const keep=[];
-  while(idx.length){
-    const c=idx.shift(); keep.push(c);
-    for(let k=idx.length-1;k>=0;k--){
-      if(iou(boxes[c],boxes[idx[k]])>thr) idx.splice(k,1);
-    }
-  }
-  return keep;
-}
-function iou(a,b){
-  const x1=Math.max(a[0],b[0]),y1=Math.max(a[1],b[1]),x2=Math.min(a[2],b[2]),y2=Math.min(a[3],b[3]);
-  const w=Math.max(0,x2-x1),h=Math.max(0,y2-y1),inter=w*h;
-  const areaA=(a[2]-a[0])*(a[3]-a[1]),areaB=(b[2]-b[0])*(b[3]-b[1]);
-  return inter/(areaA+areaB-inter);
-}
-
-function postprocess(out, r){
-  const d = out.data, n = out.dims[1], stride = out.dims[2];
-  const boxes=[], scores=[], clsIds=[];
-  for(let i=0;i<n;i++){
-    const o=i*stride, obj=d[o+4];
-    let best=5, bestv=d[o+5];
-    for(let c=6;c<stride;c++){ if(d[o+c]>bestv){ bestv=d[o+c]; best=c; } }
-    const score=obj*bestv;
-    if(score<CONF) continue;
-    if(!SHOW.has(CLASSES[best-5])) continue; // descartar clases irrelevantes
+function iou(a,b){ const x1=Math.max(a[0],b[0]),y1=Math.max(a[1],b[1]),x2=Math.min(a[2],b[2]),y2=Math.min(a[3],b[3]);
+  const w=Math.max(0,x2-x1),h=Math.max(0,y2-y1),inter=w*h; return inter/((a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-inter); }
+function nms(boxes,scores,thr){ const idx=scores.map((s,i)=>i).sort((a,b)=>scores[b]-scores[a]),keep=[];
+  while(idx.length){ const c=idx.shift(); keep.push(c); for(let k=idx.length-1;k>=0;k--) if(iou(boxes[c],boxes[idx[k]])>thr) idx.splice(k,1); } return keep; }
+function postprocess(out,r){
+  const d=out.data,n=out.dims[1],stride=out.dims[2],boxes=[],scores=[],clsIds=[];
+  for(let i=0;i<n;i++){ const o=i*stride,obj=d[o+4]; let best=5,bv=d[o+5];
+    for(let c=6;c<stride;c++){ if(d[o+c]>bv){bv=d[o+c];best=c;} }
+    const sc=obj*bv; if(sc<CONF) continue; if(!SHOW.has(CLASSES[best-5])) continue;
     const cx=d[o],cy=d[o+1],w=d[o+2],h=d[o+3];
-    boxes.push([(cx-w/2)/r,(cy-h/2)/r,(cx+w/2)/r,(cy+h/2)/r]);
-    scores.push(score); clsIds.push(best-5);
-  }
-  const results=[];
-  const uniq=[...new Set(clsIds)];
-  for(const c of uniq){
-    const gi=clsIds.map((v,i)=>i).filter(i=>clsIds[i]===c);
-    const gb=gi.map(i=>boxes[i]), gs=gi.map(i=>scores[i]);
-    for(const k of nms(gb,gs,NMS)){
-      results.push({box:gb[k], cls:CLASSES[c], score:gs[k]});
-    }
-  }
+    boxes.push([(cx-w/2)/r,(cy-h/2)/r,(cx+w/2)/r,(cy+h/2)/r]); scores.push(sc); clsIds.push(best-5); }
+  const results=[]; for(const c of [...new Set(clsIds)]){
+    const gi=clsIds.map((v,i)=>i).filter(i=>clsIds[i]===c),gb=gi.map(i=>boxes[i]),gs=gi.map(i=>scores[i]);
+    for(const k of nms(gb,gs,NMS)) results.push({box:gb[k],cls:CLASSES[c],score:gs[k]}); }
   return results;
 }
-
-const SEND_W = 960;  // ancho al que se manda el frame en modo RunPod
-function drawFrame(dets, scale){
+function drawFrame(dets,scale){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
-  const { people, items } = analyzeEPP(dets);
-
-  // Items de EPP: caja fina (celeste presente / rojo ausente)
+  const {people,items}=analyzeEPP(dets);
   ctx.lineWidth=2;
-  for(const it of items){
-    ctx.strokeStyle = it.present ? "#00b4ff" : "#ff2d2d";
-    ctx.strokeRect(it.box[0]*scale, it.box[1]*scale,
-                   (it.box[2]-it.box[0])*scale, (it.box[3]-it.box[1])*scale);
-  }
-
-  // Personas: caja gruesa segun estado + etiqueta
+  for(const it of items){ ctx.strokeStyle=it.present?"#00b4ff":"#ff2d2d";
+    ctx.strokeRect(it.box[0]*scale,it.box[1]*scale,(it.box[2]-it.box[0])*scale,(it.box[3]-it.box[1])*scale); }
   ctx.font="bold 20px sans-serif"; ctx.lineWidth=4;
-  for(const p of people){
-    const x1=p.box[0]*scale, y1=p.box[1]*scale;
-    const w=(p.box[2]-p.box[0])*scale, h=(p.box[3]-p.box[1])*scale;
-    const col=ST_COLOR[p.status];
+  for(const p of people){ const x1=p.box[0]*scale,y1=p.box[1]*scale,w=(p.box[2]-p.box[0])*scale,h=(p.box[3]-p.box[1])*scale,col=ST_COLOR[p.status];
     ctx.strokeStyle=col; ctx.strokeRect(x1,y1,w,h);
-    let lbl;
-    if(p.status==="incumple") lbl=`#${p.id} SIN ${p.missing.join("/").toUpperCase()}`;
-    else if(p.status==="verificando") lbl=`#${p.id} verificando...`;
-    else lbl=`#${p.id} EPP OK`;
-    const tw=ctx.measureText(lbl).width;
-    const ty=Math.max(y1-26,0);
-    ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26);
-    ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,ty+19);
-  }
+    let lbl=p.status==="incumple"?`#${p.id} SIN ${p.missing.join("/").toUpperCase()}`:(p.status==="verificando"?`#${p.id} verificando...`:`#${p.id} EPP OK`);
+    const tw=ctx.measureText(lbl).width,ty=Math.max(y1-26,0);
+    ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26); ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,ty+19); }
   $("ndet").textContent=people.length;
+  renderPanel(people.map(p=>({id:p.id,status:p.status,unknown:p.unknown,epp:Object.fromEntries(Object.entries(p.epp).map(([k,v])=>[k,v.present]))})));
 }
-
 function sendFrameWS(){
-  const vw=video.videoWidth, vh=video.videoHeight;
-  const sh=Math.round(vh*SEND_W/vw);
-  jpg.width=SEND_W; jpg.height=sh;
-  jctx.drawImage(video,0,0,SEND_W,sh);
-  waitingReply=true;
-  jpg.toBlob(async(blob)=>{
-    if(blob && wsReady){ try { ws.send(await blob.arrayBuffer()); } catch(e){ waitingReply=false; } }
-    else waitingReply=false;
-  }, "image/jpeg", 0.6);
+  const vw=video.videoWidth,vh=video.videoHeight,sh=Math.round(vh*SEND_W/vw);
+  jpg.width=SEND_W; jpg.height=sh; jctx.drawImage(video,0,0,SEND_W,sh); waitingReply=true;
+  jpg.toBlob(async(blob)=>{ if(blob&&wsReady){ try{ ws.send(await blob.arrayBuffer()); }catch(e){ waitingReply=false; } } else waitingReply=false; },"image/jpeg",0.6);
 }
-
-let frames=0, lastT=performance.now(), fps=0;
+let frames=0,lastT=performance.now();
 async function loop(){
   if(!running) return;
-  if(mode==="local"){
-    const { tensor, r } = preprocess();
-    const t0=performance.now();
-    const out = await session.run({ [session.inputNames[0]]: tensor });
-    const t1=performance.now();
-    const dets = postprocess(out[session.outputNames[0]], r);
-    drawFrame(dets, 1);
-    $("inftime").textContent=(t1-t0).toFixed(0);
+  if(procMode==="local"){
+    const {tensor,r}=preprocess(); const t0=performance.now();
+    const out=await session.run({[session.inputNames[0]]:tensor}); const t1=performance.now();
+    drawFrame(postprocess(out[session.outputNames[0]],r),1); $("inftime").textContent=(t1-t0).toFixed(0);
   } else {
-    if(wsReady && !waitingReply) sendFrameWS();
-    drawFrame(remoteDets, canvas.width/SEND_W);
+    if(wsReady&&!waitingReply) sendFrameWS(); drawFrame(remoteDets,canvas.width/SEND_W);
   }
-
-  frames++;
-  const now=performance.now();
-  if(now-lastT>=500){ fps=frames*1000/(now-lastT); frames=0; lastT=now;
-    $("fps").innerHTML=`<b>${fps.toFixed(1)}</b> FPS`; }
+  frames++; const now=performance.now();
+  if(now-lastT>=500){ $("fps").innerHTML=`<b>${(frames*1000/(now-lastT)).toFixed(1)}</b> FPS`; frames=0; lastT=now; }
   requestAnimationFrame(loop);
 }
 
-$("start").addEventListener("click", async ()=>{
-  $("start").style.display="none";
-  try { await init(); } catch(e){ setStatus("Error: "+e.message); $("start").style.display="block"; }
-});
-
-// PWA: registrar service worker (cachea app + modelo para uso offline)
-if("serviceWorker" in navigator){
-  navigator.serviceWorker.register("sw.js").catch(()=>{});
-}
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 </script>
 </body>
 </html>
