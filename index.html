@@ -19,6 +19,7 @@
          color:#fff; font-size:.85rem; font-weight:600; cursor:pointer; }
   .btn.active { background:#2563eb; }
   .btn.primary { border-color:#16a34a; } .btn.primary.on { background:#16a34a; }
+  .btn.small { padding:5px 10px; font-size:.72rem; border-color:#6b7280; }
   .layout { display:flex; gap:14px; flex-wrap:wrap; padding:0 14px 14px; }
   .stage { flex:2; min-width:320px; position:relative; background:#000; border-radius:10px; overflow:hidden; }
   #canvas, #ipimg { width:100%; display:block; max-height:78vh; object-fit:contain; background:#000; }
@@ -58,6 +59,10 @@
       <span class="lbl">Procesar en</span><span class="btn active" style="cursor:default">☁️ RunPod</span>
     </div>
     <button class="btn primary" id="startbtn">▶ Iniciar</button>
+    <div class="group">
+      <button class="btn small" id="edit-runpod" title="Cambiar la URL del pod RunPod">✎ RunPod</button>
+      <button class="btn small" id="edit-relay" title="Cambiar la URL del relay (cámara IP)">✎ Relay</button>
+    </div>
   </div>
 </header>
 
@@ -189,6 +194,29 @@ $("proc-runpod").onclick=async()=>{
   setStatus("Conectando a RunPod...");
   try{ if(!wsReady) await connectWS(url); setProc("runpod"); $("backend").textContent="runpod"; setStatus("Procesando en RunPod (GPU)"); }
   catch(e){ setStatus("Error RunPod: "+e.message+" — sigo en celular"); setProc("local"); }
+};
+
+// ✎ Cambiar de pod: reescribe la URL de RunPod y la aplica en vivo (reconecta el
+// WebSocket del celular o reenvía la nueva URL al relay si la cámara IP está corriendo).
+$("edit-runpod").onclick=async()=>{
+  const url=getRunpodURL(true); if(!url) return;
+  if(source==="phone" && procMode==="runpod"){
+    try{ if(ws) ws.close(); wsReady=false; await connectWS(url); $("backend").textContent="runpod"; setStatus("Pod actualizado ✓"); }
+    catch(e){ setStatus("Error con el pod nuevo: "+e.message); }
+  } else if(source==="ip" && ipTimer){
+    try{ const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runpod_url:url})});
+      if(!r.ok) throw new Error("HTTP "+r.status); setStatus("Pod actualizado en el relay ✓"); }
+    catch(e){ setStatus("No se pudo avisar al relay: "+e.message); }
+  } else setStatus("URL de RunPod guardada ✓ (se usa al Iniciar)");
+};
+// ✎ Cambiar la URL del relay (para el modo cámara IP desde GitHub Pages).
+$("edit-relay").onclick=async()=>{
+  const cur=localStorage.getItem("relay_url")||"";
+  const u=(prompt("URL del relay de la cámara IP (https://<tu-pc>.ts.net):",cur)||"").trim();
+  if(!u) return;
+  localStorage.setItem("relay_url",u.replace(/\/$/,""));
+  setStatus("URL del relay guardada ✓");
+  if(source==="ip" && ipTimer){ stopIP(); updateBtn(false); await startIP(); }
 };
 
 // ==== iniciar / detener ====
