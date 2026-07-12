@@ -19,9 +19,13 @@ if [ ! -d YOLOX ]; then
   git clone -q https://github.com/Megvii-BaseDetection/YOLOX.git
 fi
 cd YOLOX
-pip install -q -r requirements.txt
-pip install -q -v -e . 2>&1 | tail -1
-pip install -q kaggle onnx onnxruntime
+# Deps de entrenamiento explicitas (puras/wheels). El `requirements.txt` de YOLOX
+# incluye onnx-simplifier, que necesita cmake para compilar y, si falla, aborta TODO
+# el install dejando el entorno a medias. Por eso instalamos lo necesario a mano.
+apt-get install -y -q cmake >/dev/null 2>&1 || true
+pip install -q loguru thop tabulate tqdm psutil tensorboard ninja \
+  opencv-python-headless pycocotools onnx onnxruntime kaggle
+pip install -q -e . 2>&1 | tail -1 || true   # editable install opcional; si falla usamos PYTHONPATH
 mkdir -p weights
 [ -f weights/yolox_s.pth ] || wget -q \
   https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth \
@@ -68,10 +72,12 @@ python /workspace/yolo_to_coco.py --images "$VAL_IMG" --labels "$VAL_LBL" \
 # sin GPU libre para inferencia): sin fijar CUDA_VISIBLE_DEVICES y -d 2 -b 32.
 cp /workspace/yolox_fire_exp.py /workspace/YOLOX/yolox_fire_exp.py
 export CUDA_VISIBLE_DEVICES="${TRAIN_GPU:-0}"
-python tools/train.py -f yolox_fire_exp.py -d 1 -b 16 --fp16 -c weights/yolox_s.pth
+# PYTHONPATH=raiz de YOLOX: 'python tools/train.py' pone tools/ en sys.path, no la
+# raiz, asi que 'import yolox' falla sin esto (el editable install no siempre entra).
+PYTHONPATH="$(pwd)" python tools/train.py -f yolox_fire_exp.py -d 1 -b 16 --fp16 -c weights/yolox_s.pth
 
 # ---- 5) Exportar a ONNX (entrada dinamica, para inferir a 640 o 1280) ----
 BEST=YOLOX_outputs/yolox_fire/best_ckpt.pth
-python tools/export_onnx.py -f yolox_fire_exp.py -c "$BEST" \
+PYTHONPATH="$(pwd)" python tools/export_onnx.py -f yolox_fire_exp.py -c "$BEST" \
   --output-name /workspace/yolox_fire.onnx --dynamic --decode_in_inference
 echo "==== LISTO: /workspace/yolox_fire.onnx ===="
