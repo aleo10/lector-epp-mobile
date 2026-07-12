@@ -39,6 +39,12 @@
   .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:.75rem; margin:2px 4px 2px 0; }
   .badge.ok{ background:#14532d; color:#86efac; } .badge.bad{ background:#7f1d1d; color:#fca5a5; } .badge.unk{ background:#78350f; color:#fcd34d; }
   .empty { color:#9ca3af; font-style:italic; }
+  #alertspanel { margin-top:10px; }
+  .alert { background:#450a0a; border-left:6px solid #ef4444; border-radius:8px;
+    padding:8px 12px; margin-bottom:6px; font-size:.85rem; }
+  .alert .t { color:#9ca3af; font-size:.72rem; }
+  .alert.fresh { animation: flash 1s ease-in-out 2; }
+  @keyframes flash { 0%,100%{ background:#450a0a; } 50%{ background:#b91c1c; } }
 </style>
 </head>
 <body>
@@ -63,6 +69,15 @@
       <button class="btn small" id="edit-runpod" title="Cambiar la URL del pod RunPod">✎ RunPod</button>
       <button class="btn small" id="edit-relay" title="Cambiar la URL del relay (cámara IP)">✎ Relay</button>
     </div>
+    <div class="group" id="zoneGroup" style="display:none">
+      <button class="btn small" id="zone-edit" title="Dibujar zona restringida sobre el video">⚠ Zona</button>
+    </div>
+  </div>
+  <div class="selectors" id="zoneTools" style="display:none;margin-top:8px">
+    <span class="lbl">Click para agregar puntos del polígono (mín. 3)</span>
+    <button class="btn small primary" id="zone-save">✓ Guardar</button>
+    <button class="btn small" id="zone-clear">🗑 Borrar</button>
+    <button class="btn small" id="zone-cancel">✕ Cancelar</button>
   </div>
 </header>
 
@@ -71,6 +86,7 @@
     <video id="video" playsinline muted></video>
     <canvas id="canvas"></canvas>
     <img id="ipimg" alt="Cámara IP" style="display:none">
+    <canvas id="zonecanvas" style="display:none;position:absolute;top:0;left:0;cursor:crosshair"></canvas>
     <div id="hud" style="display:none">
       <div id="fps"><b>--</b> FPS</div>
       <div id="infobox">backend: <span id="backend">--</span><br>inf: <span id="inftime">--</span> ms<br>det: <span id="ndet">0</span></div>
@@ -79,6 +95,7 @@
   <div class="panel">
     <div id="status"><span class="dot" id="dot"></span><span id="statustext">Listo. Elegí fuente y tocá Iniciar.</span></div>
     <div id="detpanel" class="empty">Sin personas detectadas</div>
+    <div id="alertspanel"></div>
   </div>
 </div>
 
@@ -178,6 +195,8 @@ function setSource(s){
   $("canvas").style.display = s==="phone" ? "block" : "none";
   $("hud").style.display    = s==="phone" ? "flex" : "none";
   $("ipimg").style.display  = s==="ip" ? "block" : "none";
+  $("zoneGroup").style.display = s==="ip" ? "flex" : "none";
+  if(s!=="ip") exitZoneEdit(false);
   setStatus(s==="phone" ? "Fuente celular. Tocá Iniciar." : "Fuente cámara IP (→ RunPod). Tocá Iniciar.");
   $("detpanel").innerHTML='<div class="empty">Sin personas detectadas</div>';
 }
@@ -217,6 +236,62 @@ $("edit-relay").onclick=async()=>{
   localStorage.setItem("relay_url",u.replace(/\/$/,""));
   setStatus("URL del relay guardada ✓");
   if(source==="ip" && ipTimer){ stopIP(); updateBtn(false); await startIP(); }
+};
+
+// ==== editor de zona restringida (dibuja sobre el video de la cámara IP) ====
+// Los puntos se dibujan en pixeles del canvas TAL COMO SE VE (mismo tamaño que el
+// <img> renderizado); al guardar se escalan al tamaño natural de la imagen, que es
+// el MISMO espacio de pixeles que usa el relay para las cajas de detección/zonas.
+const zoneCanvas=$("zonecanvas"), zctx=zoneCanvas.getContext("2d");
+let zonePoints=[], zoneEditing=false;
+function zoneRedraw(){
+  zctx.clearRect(0,0,zoneCanvas.width,zoneCanvas.height);
+  if(!zonePoints.length) return;
+  zctx.strokeStyle="#ff9100"; zctx.fillStyle="#ff9100"; zctx.lineWidth=2;
+  zctx.beginPath(); zctx.moveTo(zonePoints[0][0],zonePoints[0][1]);
+  for(const p of zonePoints.slice(1)) zctx.lineTo(p[0],p[1]);
+  if(zonePoints.length>2){ zctx.closePath(); }
+  zctx.stroke();
+  for(const p of zonePoints){ zctx.beginPath(); zctx.arc(p[0],p[1],4,0,Math.PI*2); zctx.fill(); }
+}
+function enterZoneEdit(){
+  const img=$("ipimg");
+  zoneCanvas.width=img.clientWidth; zoneCanvas.height=img.clientHeight;
+  zoneCanvas.style.width=img.clientWidth+"px"; zoneCanvas.style.height=img.clientHeight+"px";
+  zonePoints=[]; zoneRedraw();
+  zoneCanvas.style.display="block"; $("zoneTools").style.display="flex";
+  zoneEditing=true;
+}
+function exitZoneEdit(){
+  zoneEditing=false;
+  zoneCanvas.style.display="none"; $("zoneTools").style.display="none";
+}
+zoneCanvas.addEventListener("click",(ev)=>{
+  if(!zoneEditing) return;
+  const r=zoneCanvas.getBoundingClientRect();
+  zonePoints.push([ev.clientX-r.left, ev.clientY-r.top]);
+  zoneRedraw();
+});
+$("zone-edit").onclick=()=>{
+  if(!ipTimer){ setStatus("Iniciá la cámara IP primero para ver el video y dibujar la zona"); return; }
+  if(!zoneEditing) enterZoneEdit(); else exitZoneEdit();
+};
+$("zone-cancel").onclick=()=>exitZoneEdit();
+$("zone-save").onclick=async()=>{
+  if(zonePoints.length<3){ setStatus("Marcá al menos 3 puntos para cerrar la zona"); return; }
+  const img=$("ipimg");
+  const sx=(img.naturalWidth||img.clientWidth)/zoneCanvas.width, sy=(img.naturalHeight||img.clientHeight)/zoneCanvas.height;
+  const scaled=zonePoints.map(([x,y])=>[x*sx,y*sy]);
+  try{
+    const r=await fetch(RELAY_BASE+"/zones",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({points:scaled})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    setStatus("Zona guardada ✓"); exitZoneEdit();
+  }catch(e){ setStatus("No se pudo guardar la zona: "+e.message); }
+};
+$("zone-clear").onclick=async()=>{
+  try{ await fetch(RELAY_BASE+"/zones",{method:"DELETE"}); setStatus("Zona borrada ✓"); }
+  catch(e){ setStatus("No se pudo borrar la zona: "+e.message); }
+  exitZoneEdit();
 };
 
 // ==== iniciar / detener ====
@@ -275,6 +350,8 @@ function stopIP(){
   fetch(RELAY_BASE+"/ip/stop",{method:"POST"}).catch(()=>{});
   $("ipimg").removeAttribute("src");
   $("dot").classList.remove("on");
+  $("alertspanel").innerHTML="";
+  exitZoneEdit();
 }
 async function pollIP(){
   try{
@@ -282,6 +359,7 @@ async function pollIP(){
     $("dot").classList.toggle("on",!!s.conn);
     setStatus("Cámara IP → RunPod · "+(s.conn?"conectado":"sin conexión")+" · "+(s.fps||0)+" FPS · "+(s.text||""));
     renderPanel(await (await fetch(RELAY_BASE+"/detections",{cache:"no-store"})).json());
+    renderAlerts(await (await fetch(RELAY_BASE+"/events",{cache:"no-store"})).json());
   }catch(e){ setStatus("Sin respuesta del relay..."); }
 }
 
@@ -294,6 +372,18 @@ function renderPanel(people){
     const unk=(p.unknown||[]).map(k=>`<span class="badge unk">${NAMES[k]||k}: ?</span>`).join("");
     const icon=p.status==="cumple"?"✅":p.status==="incumple"?"❌":"⏳";
     return `<div class="card ${p.status}"><div class="title">${icon} Persona #${p.id} — ${p.status.toUpperCase()}</div>${badges}${unk}</div>`;
+  }).join("");
+}
+
+// ==== panel de alertas de seguridad (intrusión / caída) ====
+function renderAlerts(events){
+  const el=$("alertspanel");
+  if(!events||!events.length){ el.innerHTML=""; return; }
+  const now=Date.now()/1000;
+  el.innerHTML=events.map(e=>{
+    const age=now-e.ts, fresh=age<5;
+    const when=new Date(e.ts*1000).toLocaleTimeString();
+    return `<div class="alert${fresh?" fresh":""}"><div>${e.text}</div><div class="t">${when}</div></div>`;
   }).join("");
 }
 
