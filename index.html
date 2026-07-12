@@ -64,6 +64,11 @@
     <div class="group" id="ipProcNote" style="display:none">
       <span class="lbl">Procesar en</span><span class="btn active" style="cursor:default">☁️ RunPod</span>
     </div>
+    <div class="group" id="detGroup">
+      <span class="lbl">Detectar</span>
+      <button class="btn active" id="det-epp">🦺 EPP</button>
+      <button class="btn" id="det-fire">🔥 Humo</button>
+    </div>
     <button class="btn primary" id="startbtn">▶ Iniciar</button>
     <div class="group">
       <button class="btn small" id="edit-runpod" title="Cambiar la URL del pod RunPod">✎ RunPod</button>
@@ -109,6 +114,15 @@ const MODEL_URL = "models/yolox_ppe.onnx";   // relativo: sirve en GitHub Pages 
 const INPUT = 640, CONF = 0.35, NMS = 0.45;
 const CLASSES = ["construction","Hardhat","Mask","NO-Hardhat","NO-Mask","NO-Safety Vest","Person","Safety Cone","Safety Vest","machinery","vehicle"];
 const SHOW = new Set(["Person","Hardhat","NO-Hardhat","Mask","NO-Mask","Safety Vest","NO-Safety Vest"]);
+
+// ==== modelo de humo/fuego (2 clases; se corre en modo celular local) ====
+const FIRE_MODEL_URL = "models/yolox_fire.onnx";
+const FIRE_CLASSES = ["smoke","fire"];
+const FIRE_CONF = 0.35;
+const FIRE_COLOR = { smoke:"#38bdf8", fire:"#ff4d00" };
+const FIRE_LABEL = { smoke:"💨 HUMO", fire:"🔥 FUEGO" };
+let detector = "epp";     // "epp" | "fire"
+let fireSession = null;
 
 // ==== logica EPP (misma que el servidor) ====
 const REQUIRED = ["casco","chaleco"];
@@ -197,6 +211,7 @@ function setSource(s){
   $("ipimg").style.display  = s==="ip" ? "block" : "none";
   $("zoneGroup").style.display = s==="ip" ? "flex" : "none";
   if(s!=="ip") exitZoneEdit(false);
+  updateDetVisibility();
   setStatus(s==="phone" ? "Fuente celular. Tocá Iniciar." : "Fuente cámara IP (→ RunPod). Tocá Iniciar.");
   $("detpanel").innerHTML='<div class="empty">Sin personas detectadas</div>';
 }
@@ -204,6 +219,17 @@ function setProc(m){
   procMode=m;
   $("proc-local").classList.toggle("active",m==="local");
   $("proc-runpod").classList.toggle("active",m==="runpod");
+  updateDetVisibility();
+}
+// El selector de detector (EPP/Humo) aplica a la inferencia LOCAL del celular;
+// en RunPod/cámara IP el modelo lo decide el servidor, asi que se oculta.
+function updateDetVisibility(){
+  $("detGroup").style.display = (source==="phone" && procMode==="local") ? "flex" : "none";
+}
+function setDetector(dt){
+  detector=dt;
+  $("det-epp").classList.toggle("active",dt==="epp");
+  $("det-fire").classList.toggle("active",dt==="fire");
 }
 $("src-phone").onclick=()=>setSource("phone");
 $("src-ip").onclick=()=>setSource("ip");
@@ -214,6 +240,9 @@ $("proc-runpod").onclick=async()=>{
   try{ if(!wsReady) await connectWS(url); setProc("runpod"); $("backend").textContent="runpod"; setStatus("Procesando en RunPod (GPU)"); }
   catch(e){ setStatus("Error RunPod: "+e.message+" — sigo en celular"); setProc("local"); }
 };
+$("det-epp").onclick=async()=>{ setDetector("epp"); if(running&&procMode==="local"){ await ensureModel(); setStatus("Detector: EPP"); } };
+$("det-fire").onclick=async()=>{ setDetector("fire");
+  if(running&&procMode==="local"){ setStatus("Cargando modelo de humo..."); await ensureFireModel(); setStatus("Detector: humo/fuego 🔥"); } };
 
 // ✎ Cambiar de pod: reescribe la URL de RunPod y la aplica en vivo (reconecta el
 // WebSocket del celular o reenvía la nueva URL al relay si la cámara IP está corriendo).
@@ -315,6 +344,7 @@ async function ensureModel(){
 async function startPhone(){
   try{
     if(procMode==="runpod"){ const url=getRunpodURL(); if(!url){ setStatus("Falta URL de RunPod"); return; } if(!wsReady) await connectWS(url); $("backend").textContent="runpod"; }
+    else if(detector==="fire"){ await ensureFireModel(); }
     else { await ensureModel(); }
     setStatus("Iniciando cámara del celular...");
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},audio:false});
@@ -432,6 +462,39 @@ function drawFrame(dets,scale){
   $("ndet").textContent=people.length;
   renderPanel(people.map(p=>({id:p.id,status:p.status,unknown:p.unknown,epp:Object.fromEntries(Object.entries(p.epp).map(([k,v])=>[k,v.present]))})));
 }
+
+// ==== humo/fuego (mismo preprocess 640; output [N,7] = 4 bbox +1 obj +2 clases) ====
+async function ensureFireModel(){
+  if(fireSession) return;
+  setStatus("Cargando modelo de humo/fuego (36 MB)...");
+  try{ if(navigator.gpu){ fireSession=await ort.InferenceSession.create(FIRE_MODEL_URL,{executionProviders:["webgpu"],graphOptimizationLevel:"all"}); } }catch(e){ console.warn(e); }
+  if(!fireSession){ fireSession=await ort.InferenceSession.create(FIRE_MODEL_URL,{executionProviders:["wasm"],graphOptimizationLevel:"all"}); }
+  $("backend").textContent = navigator.gpu && fireSession ? "webgpu" : "wasm";
+}
+function postprocessFire(out,r){
+  const d=out.data,n=out.dims[1],stride=out.dims[2],boxes=[],scores=[],clsIds=[];
+  for(let i=0;i<n;i++){ const o=i*stride,obj=d[o+4]; let best=5,bv=d[o+5];
+    for(let c=6;c<stride;c++){ if(d[o+c]>bv){bv=d[o+c];best=c;} }
+    const sc=obj*bv; if(sc<FIRE_CONF) continue;
+    const cx=d[o],cy=d[o+1],w=d[o+2],h=d[o+3];
+    boxes.push([(cx-w/2)/r,(cy-h/2)/r,(cx+w/2)/r,(cy+h/2)/r]); scores.push(sc); clsIds.push(best-5); }
+  const results=[]; for(const c of [...new Set(clsIds)]){
+    const gi=clsIds.map((v,i)=>i).filter(i=>clsIds[i]===c),gb=gi.map(i=>boxes[i]),gs=gi.map(i=>scores[i]);
+    for(const k of nms(gb,gs,NMS)) results.push({box:gb[k],cls:FIRE_CLASSES[c],score:gs[k]}); }
+  return results;
+}
+function drawFire(dets){
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  ctx.lineWidth=4; ctx.font="bold 20px sans-serif";
+  for(const d of dets){ const [x1,y1,x2,y2]=d.box, col=FIRE_COLOR[d.cls]||"#fff";
+    ctx.strokeStyle=col; ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+    const lbl=`${FIRE_LABEL[d.cls]} ${(d.score*100)|0}%`, tw=ctx.measureText(lbl).width, ty=Math.max(y1-26,0);
+    ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26); ctx.fillStyle="#111"; ctx.fillText(lbl,x1+4,ty+19); }
+  $("ndet").textContent=dets.length;
+  const el=$("detpanel");
+  el.innerHTML = dets.length ? dets.map(d=>`<div class="card ${d.cls==="fire"?"incumple":"verificando"}"><div class="title">${FIRE_LABEL[d.cls]} — ${(d.score*100)|0}%</div></div>`).join("")
+                             : '<div class="empty">Sin humo/fuego detectado</div>';
+}
 function sendFrameWS(){
   const vw=video.videoWidth,vh=video.videoHeight,sh=Math.round(vh*SEND_W/vw);
   jpg.width=SEND_W; jpg.height=sh; jctx.drawImage(video,0,0,SEND_W,sh); waitingReply=true;
@@ -441,9 +504,15 @@ let frames=0,lastT=performance.now();
 async function loop(){
   if(!running) return;
   if(procMode==="local"){
-    const {tensor,r}=preprocess(); const t0=performance.now();
-    const out=await session.run({[session.inputNames[0]]:tensor}); const t1=performance.now();
-    drawFrame(postprocess(out[session.outputNames[0]],r),1); $("inftime").textContent=(t1-t0).toFixed(0);
+    const activeSession = detector==="fire" ? fireSession : session;
+    if(!activeSession){ ctx.drawImage(video,0,0,canvas.width,canvas.height); }  // modelo aún cargando
+    else {
+      const {tensor,r}=preprocess(); const t0=performance.now();
+      const out=await activeSession.run({[activeSession.inputNames[0]]:tensor}); const t1=performance.now();
+      if(detector==="fire") drawFire(postprocessFire(out[activeSession.outputNames[0]],r));
+      else drawFrame(postprocess(out[activeSession.outputNames[0]],r),1);
+      $("inftime").textContent=(t1-t0).toFixed(0);
+    }
   } else {
     if(wsReady&&!waitingReply) sendFrameWS(); drawFrame(remoteDets,canvas.width/SEND_W);
   }

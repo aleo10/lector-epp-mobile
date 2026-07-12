@@ -1,6 +1,6 @@
 // Service worker: cachea la app y el modelo para funcionar offline,
 // pero prioriza traer el codigo actualizado cuando hay conexion.
-const CACHE = "epp-v5";
+const CACHE = "epp-v6";
 const ASSETS = [
   "./",
   "./index.html",
@@ -9,6 +9,8 @@ const ASSETS = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];
+// El modelo de humo se cachea on-demand (cache-first, igual que el de EPP) la
+// primera vez que se usa; no va en ASSETS para no bajar 36MB extra al instalar.
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
