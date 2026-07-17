@@ -1,6 +1,6 @@
 // Service worker: cachea la app y el modelo para funcionar offline,
 // pero prioriza traer el codigo actualizado cuando hay conexion.
-const CACHE = "epp-v6";
+const CACHE = "epp-v7";
 const ASSETS = [
   "./",
   "./index.html",

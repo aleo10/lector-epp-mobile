@@ -59,10 +59,10 @@
     <div class="group" id="procGroup">
       <span class="lbl">Procesar en</span>
       <button class="btn active" id="proc-local">📱 Celular</button>
-      <button class="btn" id="proc-runpod">☁️ RunPod</button>
+      <button class="btn" id="proc-runpod">☁️ Servidor</button>
     </div>
     <div class="group" id="ipProcNote" style="display:none">
-      <span class="lbl">Procesar en</span><span class="btn active" style="cursor:default">☁️ RunPod</span>
+      <span class="lbl">Procesar en</span><span class="btn active" style="cursor:default">☁️ Servidor</span>
     </div>
     <div class="group" id="detGroup">
       <span class="lbl">Detectar</span>
@@ -71,7 +71,7 @@
     </div>
     <button class="btn primary" id="startbtn">▶ Iniciar</button>
     <div class="group">
-      <button class="btn small" id="edit-runpod" title="Cambiar la URL del pod RunPod">✎ RunPod</button>
+      <button class="btn small" id="edit-runpod" title="Cambiar la URL del servidor de inferencia">✎ Servidor</button>
       <button class="btn small" id="edit-relay" title="Cambiar la URL del relay (cámara IP)">✎ Relay</button>
     </div>
     <div class="group" id="zoneGroup" style="display:none">
@@ -169,12 +169,24 @@ let ipTimer=null, RELAY_BASE="";     // base del relay para modo IP ("" = mismo 
 
 function setStatus(t){ $("statustext").textContent=t; }
 
-// ==== URL de RunPod (compartida celular+IP, guardada en el navegador) ====
-function getRunpodURL(force){
-  let u=localStorage.getItem("runpod_url")||"";
-  if(force || !u){ u=(prompt("URL del servidor RunPod (wss://...proxy.runpod.net):",u)||"").trim();
-    if(u) localStorage.setItem("runpod_url",u); }
+// ==== URL del servidor de inferencia (api-yolox; compartida celular+IP) ====
+// Guardada en localStorage["yolox_ws"]; migra el valor viejo "runpod_url" si existe.
+const DEFAULT_WS="wss://tucumania-1.tail9ca12.ts.net/ws";
+// modelo que pide el celular en modo servidor según el detector elegido
+// (epp-640 = rápido para video en vivo; editá la URL con ?model=epp para el preciso 1280)
+const SERVER_MODEL={ epp:"epp-640", fire:"humo" };
+function getServerURL(force){
+  let u=localStorage.getItem("yolox_ws")||"";
+  if(!u){ const old=localStorage.getItem("runpod_url");
+    if(old){ u=old; localStorage.setItem("yolox_ws",u); } }
+  if(force || !u){ u=(prompt("URL del servidor de inferencia (wss://.../ws):",u||DEFAULT_WS)||"").trim();
+    if(u) localStorage.setItem("yolox_ws",u); }
   return u;
+}
+// arma la URL del WS pisando ?model= según el detector activo
+function wsURLFor(base){
+  try{ const u=new URL(base); u.searchParams.set("model",SERVER_MODEL[detector]||"epp-640"); return u.toString(); }
+  catch(e){ return base; }  // URL rara (pod viejo): se usa tal cual
 }
 // ==== base del relay para el modo cámara IP ====
 // Si esta misma página la sirve el relay (localhost o Tailscale), usa mismo origen.
@@ -212,7 +224,7 @@ function setSource(s){
   $("zoneGroup").style.display = s==="ip" ? "flex" : "none";
   if(s!=="ip") exitZoneEdit(false);
   updateDetVisibility();
-  setStatus(s==="phone" ? "Fuente celular. Tocá Iniciar." : "Fuente cámara IP (→ RunPod). Tocá Iniciar.");
+  setStatus(s==="phone" ? "Fuente celular. Tocá Iniciar." : "Fuente cámara IP (→ servidor). Tocá Iniciar.");
   $("detpanel").innerHTML='<div class="empty">Sin personas detectadas</div>';
 }
 function setProc(m){
@@ -221,41 +233,52 @@ function setProc(m){
   $("proc-runpod").classList.toggle("active",m==="runpod");
   updateDetVisibility();
 }
-// El selector de detector (EPP/Humo) aplica a la inferencia LOCAL del celular;
-// en RunPod/cámara IP el modelo lo decide el servidor, asi que se oculta.
+// El selector de detector (EPP/Humo) aplica al celular en ambos modos: local elige
+// el modelo onnx; servidor elige el ?model= del WS. En cámara IP lo maneja el relay.
 function updateDetVisibility(){
-  $("detGroup").style.display = (source==="phone" && procMode==="local") ? "flex" : "none";
+  $("detGroup").style.display = source==="phone" ? "flex" : "none";
 }
 function setDetector(dt){
   detector=dt;
   $("det-epp").classList.toggle("active",dt==="epp");
   $("det-fire").classList.toggle("active",dt==="fire");
 }
+// reconecta el WS con el modelo del detector activo (modo servidor)
+async function reconnectServerWS(){
+  const base=getServerURL(); if(!base) return false;
+  if(ws) try{ ws.close(); }catch(e){}
+  wsReady=false; remoteDets=[]; waitingReply=false;
+  await connectWS(wsURLFor(base));
+  $("backend").textContent="servidor";
+  return true;
+}
 $("src-phone").onclick=()=>setSource("phone");
 $("src-ip").onclick=()=>setSource("ip");
 $("proc-local").onclick=()=>{ setProc("local"); if(running) setStatus("Procesando en el celular (WebGPU)"); };
 $("proc-runpod").onclick=async()=>{
-  const url=getRunpodURL(); if(!url) return;
-  setStatus("Conectando a RunPod...");
-  try{ if(!wsReady) await connectWS(url); setProc("runpod"); $("backend").textContent="runpod"; setStatus("Procesando en RunPod (GPU)"); }
-  catch(e){ setStatus("Error RunPod: "+e.message+" — sigo en celular"); setProc("local"); }
+  setStatus("Conectando al servidor...");
+  try{ if(!(await reconnectServerWS())) return; setProc("runpod"); setStatus("Procesando en el servidor (GPU)"); }
+  catch(e){ setStatus("Error servidor: "+e.message+" — sigo en celular"); setProc("local"); }
 };
-$("det-epp").onclick=async()=>{ setDetector("epp"); if(running&&procMode==="local"){ await ensureModel(); setStatus("Detector: EPP"); } };
-$("det-fire").onclick=async()=>{ setDetector("fire");
-  if(running&&procMode==="local"){ setStatus("Cargando modelo de humo..."); await ensureFireModel(); setStatus("Detector: humo/fuego 🔥"); } };
+$("det-epp").onclick=async()=>{ if(detector==="epp") return; setDetector("epp");
+  if(running&&procMode==="local"){ await ensureModel(); setStatus("Detector: EPP"); }
+  else if(procMode==="runpod"&&wsReady){ try{ await reconnectServerWS(); setStatus("Detector: EPP (servidor)"); }catch(e){ setStatus("Error servidor: "+e.message); } } };
+$("det-fire").onclick=async()=>{ if(detector==="fire") return; setDetector("fire");
+  if(running&&procMode==="local"){ setStatus("Cargando modelo de humo..."); await ensureFireModel(); setStatus("Detector: humo/fuego 🔥"); }
+  else if(procMode==="runpod"&&wsReady){ try{ await reconnectServerWS(); setStatus("Detector: humo/fuego 🔥 (servidor)"); }catch(e){ setStatus("Error servidor: "+e.message); } } };
 
-// ✎ Cambiar de pod: reescribe la URL de RunPod y la aplica en vivo (reconecta el
+// ✎ Cambiar de servidor: reescribe la URL y la aplica en vivo (reconecta el
 // WebSocket del celular o reenvía la nueva URL al relay si la cámara IP está corriendo).
 $("edit-runpod").onclick=async()=>{
-  const url=getRunpodURL(true); if(!url) return;
+  const url=getServerURL(true); if(!url) return;
   if(source==="phone" && procMode==="runpod"){
-    try{ if(ws) ws.close(); wsReady=false; await connectWS(url); $("backend").textContent="runpod"; setStatus("Pod actualizado ✓"); }
-    catch(e){ setStatus("Error con el pod nuevo: "+e.message); }
+    try{ await reconnectServerWS(); setStatus("Servidor actualizado ✓"); }
+    catch(e){ setStatus("Error con el servidor nuevo: "+e.message); }
   } else if(source==="ip" && ipTimer){
-    try{ const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runpod_url:url})});
-      if(!r.ok) throw new Error("HTTP "+r.status); setStatus("Pod actualizado en el relay ✓"); }
+    try{ const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({yolox_ws:url,runpod_url:url})});
+      if(!r.ok) throw new Error("HTTP "+r.status); setStatus("Servidor actualizado en el relay ✓"); }
     catch(e){ setStatus("No se pudo avisar al relay: "+e.message); }
-  } else setStatus("URL de RunPod guardada ✓ (se usa al Iniciar)");
+  } else setStatus("URL del servidor guardada ✓ (se usa al Iniciar)");
 };
 // ✎ Cambiar la URL del relay (para el modo cámara IP desde GitHub Pages).
 $("edit-relay").onclick=async()=>{
@@ -338,12 +361,12 @@ async function ensureModel(){
   let backend="wasm";
   if(navigator.gpu){ try{ session=await ort.InferenceSession.create(MODEL_URL,{executionProviders:["webgpu"],graphOptimizationLevel:"all"}); backend="webgpu"; }catch(e){ console.warn(e);} }
   if(!session){ session=await ort.InferenceSession.create(MODEL_URL,{executionProviders:["wasm"],graphOptimizationLevel:"all"}); backend="wasm"; }
-  $("backend").textContent = procMode==="runpod" ? "runpod" : backend;
+  $("backend").textContent = procMode==="runpod" ? "servidor" : backend;
   return backend;
 }
 async function startPhone(){
   try{
-    if(procMode==="runpod"){ const url=getRunpodURL(); if(!url){ setStatus("Falta URL de RunPod"); return; } if(!wsReady) await connectWS(url); $("backend").textContent="runpod"; }
+    if(procMode==="runpod"){ if(!wsReady && !(await reconnectServerWS())){ setStatus("Falta URL del servidor"); return; } }
     else if(detector==="fire"){ await ensureFireModel(); }
     else { await ensureModel(); }
     setStatus("Iniciando cámara del celular...");
@@ -351,7 +374,7 @@ async function startPhone(){
     video.srcObject=stream; await video.play();
     canvas.width=video.videoWidth; canvas.height=video.videoHeight;
     running=true; updateBtn(true); acquireWakeLock();
-    setStatus(procMode==="runpod"?"Procesando en RunPod (GPU)":"Procesando en el celular");
+    setStatus(procMode==="runpod"?"Procesando en el servidor (GPU)":"Procesando en el celular");
     loop();
   }catch(e){ setStatus("Error: "+e.message); running=false; updateBtn(false); }
 }
@@ -363,12 +386,13 @@ function stopPhone(){
 
 // ---- camara IP (via relay) ----
 async function startIP(){
-  const url=getRunpodURL(); if(!url){ setStatus("Falta URL de RunPod (la cámara IP procesa en RunPod)"); return; }
+  const url=getServerURL(); if(!url){ setStatus("Falta URL del servidor (la cámara IP procesa en el servidor)"); return; }
   setStatus("Buscando el relay de la cámara IP...");
   RELAY_BASE=await resolveRelayBase();
-  setStatus("Iniciando cámara IP → RunPod...");
+  setStatus("Iniciando cámara IP → servidor...");
   try{
-    const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runpod_url:url})});
+    // yolox_ws es el campo nuevo del relay; runpod_url queda como alias por compatibilidad
+    const r=await fetch(RELAY_BASE+"/ip/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({yolox_ws:url,runpod_url:url})});
     if(!r.ok) throw new Error("HTTP "+r.status);
   }catch(e){ setStatus("No se pudo iniciar el relay: "+e.message+". ¿La URL del relay es correcta y está corriendo?"); return; }
   $("ipimg").src=RELAY_BASE+"/video_feed?t="+Date.now();
@@ -387,7 +411,7 @@ async function pollIP(){
   try{
     const s=await (await fetch(RELAY_BASE+"/status",{cache:"no-store"})).json();
     $("dot").classList.toggle("on",!!s.conn);
-    setStatus("Cámara IP → RunPod · "+(s.conn?"conectado":"sin conexión")+" · "+(s.fps||0)+" FPS · "+(s.text||""));
+    setStatus("Cámara IP → servidor · "+(s.conn?"conectado":"sin conexión")+" · "+(s.fps||0)+" FPS · "+(s.text||""));
     renderPanel(await (await fetch(RELAY_BASE+"/detections",{cache:"no-store"})).json());
     renderAlerts(await (await fetch(RELAY_BASE+"/events",{cache:"no-store"})).json());
   }catch(e){ setStatus("Sin respuesta del relay..."); }
@@ -483,10 +507,10 @@ function postprocessFire(out,r){
     for(const k of nms(gb,gs,NMS)) results.push({box:gb[k],cls:FIRE_CLASSES[c],score:gs[k]}); }
   return results;
 }
-function drawFire(dets){
+function drawFire(dets,scale=1){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
   ctx.lineWidth=4; ctx.font="bold 20px sans-serif";
-  for(const d of dets){ const [x1,y1,x2,y2]=d.box, col=FIRE_COLOR[d.cls]||"#fff";
+  for(const d of dets){ const [x1,y1,x2,y2]=d.box.map(v=>v*scale), col=FIRE_COLOR[d.cls]||"#fff";
     ctx.strokeStyle=col; ctx.strokeRect(x1,y1,x2-x1,y2-y1);
     const lbl=`${FIRE_LABEL[d.cls]} ${(d.score*100)|0}%`, tw=ctx.measureText(lbl).width, ty=Math.max(y1-26,0);
     ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26); ctx.fillStyle="#111"; ctx.fillText(lbl,x1+4,ty+19); }
@@ -514,7 +538,9 @@ async function loop(){
       $("inftime").textContent=(t1-t0).toFixed(0);
     }
   } else {
-    if(wsReady&&!waitingReply) sendFrameWS(); drawFrame(remoteDets,canvas.width/SEND_W);
+    if(wsReady&&!waitingReply) sendFrameWS();
+    if(detector==="fire") drawFire(remoteDets,canvas.width/SEND_W);
+    else drawFrame(remoteDets,canvas.width/SEND_W);
   }
   frames++; const now=performance.now();
   if(now-lastT>=500){ $("fps").innerHTML=`<b>${(frames*1000/(now-lastT)).toFixed(1)}</b> FPS`; frames=0; lastT=now; }
