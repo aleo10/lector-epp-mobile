@@ -68,6 +68,7 @@
       <span class="lbl">Detectar</span>
       <button class="btn active" id="det-epp">🦺 EPP</button>
       <button class="btn" id="det-fire">🔥 Humo</button>
+      <button class="btn small" id="det-boots" title="Detectar botines en paralelo con EPP">🥾 Botines</button>
     </div>
     <button class="btn primary" id="startbtn">▶ Iniciar</button>
     <div class="group">
@@ -107,7 +108,7 @@
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-const NAMES = { casco:"Casco", chaleco:"Chaleco", barbijo:"Barbijo" };
+const NAMES = { casco:"Casco", chaleco:"Chaleco", barbijo:"Barbijo", botines:"Botines" };
 
 // ==== config modelo (modo celular local) ====
 const MODEL_URL = "models/yolox_ppe.onnx";   // relativo: sirve en GitHub Pages y en el relay
@@ -123,6 +124,13 @@ const FIRE_COLOR = { smoke:"#38bdf8", fire:"#ff4d00" };
 const FIRE_LABEL = { smoke:"💨 HUMO", fire:"🔥 FUEGO" };
 let detector = "epp";     // "epp" | "fire"
 let fireSession = null;
+
+// ==== modelo de botines (1 clase; corre EN PARALELO con EPP en modo celular local) ====
+const BOOTS_MODEL_URL = "models/yolox_boots.onnx";
+const BOOTS_INPUT = 896, BOOTS_CONF = 0.35;
+const BOOTS_COLOR = "#a855f7";
+const BOOTS_REQUIRED = false;   // si true, "botines" pasa a gatear cumple/incumple (default: solo indicador)
+let bootsOn = false, bootsSession = null;
 
 // ==== logica EPP (misma que el servidor) ====
 const REQUIRED = ["casco","chaleco"];
@@ -152,6 +160,19 @@ function analyzeEPP(dets){
     p.unknown=REQUIRED.filter(e=>!(e in p.epp));
     p.status=p.missing.length?"incumple":(p.unknown.length?"verificando":"cumple"); });
   return {people,items};
+}
+// Asocia cada botín detectado a la persona que lo contiene (los pies caen dentro de
+// su caja) y setea "botines" presente. Modelo de 1 clase (safety-boot), sin negativo:
+// ausencia = desconocido (no se fuerza incumple). Con BOOTS_REQUIRED, recalcula estado.
+function mergeBoots(people, bootsDets){
+  for(const b of bootsDets){ let best=null,bR=0.3;
+    for(const p of people){ const r=overlapRatio(b.box,p.box); if(r>bR){best=p;bR=r;} }
+    if(best){ const pv=best.epp["botines"]; if(!pv||b.score>pv.score) best.epp["botines"]={present:true,score:b.score}; }
+  }
+  if(BOOTS_REQUIRED){ const req=[...REQUIRED,"botines"]; people.forEach(p=>{
+    p.missing=req.filter(e=>p.epp[e]&&p.epp[e].present===false);
+    p.unknown=req.filter(e=>!(e in p.epp));
+    p.status=p.missing.length?"incumple":(p.unknown.length?"verificando":"cumple"); }); }
 }
 
 // ==== elementos ====
@@ -242,6 +263,7 @@ function setDetector(dt){
   detector=dt;
   $("det-epp").classList.toggle("active",dt==="epp");
   $("det-fire").classList.toggle("active",dt==="fire");
+  $("det-boots").style.display = dt==="epp" ? "inline-block" : "none";  // botines es add-on de EPP
 }
 // reconecta el WS con el modelo del detector activo (modo servidor)
 async function reconnectServerWS(){
@@ -266,6 +288,16 @@ $("det-epp").onclick=async()=>{ if(detector==="epp") return; setDetector("epp");
 $("det-fire").onclick=async()=>{ if(detector==="fire") return; setDetector("fire");
   if(running&&procMode==="local"){ setStatus("Cargando modelo de humo..."); await ensureFireModel(); setStatus("Detector: humo/fuego 🔥"); }
   else if(procMode==="runpod"&&wsReady){ try{ await reconnectServerWS(); setStatus("Detector: humo/fuego 🔥 (servidor)"); }catch(e){ setStatus("Error servidor: "+e.message); } } };
+// 🥾 Botines: toggle que corre el modelo de botines EN PARALELO con EPP (modo celular local).
+$("det-boots").onclick=async()=>{
+  bootsOn=!bootsOn;
+  $("det-boots").classList.toggle("active",bootsOn);
+  if(bootsOn){
+    setStatus("Cargando modelo de botines...");
+    try{ await ensureBootsModel(); setStatus("Botines EN PARALELO con EPP 🥾"); }
+    catch(e){ setStatus("Error modelo botines: "+e.message); bootsOn=false; $("det-boots").classList.remove("active"); }
+  } else setStatus("Botines desactivado");
+};
 
 // ✎ Cambiar de servidor: reescribe la URL y la aplica en vivo (reconecta el
 // WebSocket del celular o reenvía la nueva URL al relay si la cámara IP está corriendo).
@@ -471,9 +503,10 @@ function postprocess(out,r){
     for(const k of nms(gb,gs,NMS)) results.push({box:gb[k],cls:CLASSES[c],score:gs[k]}); }
   return results;
 }
-function drawFrame(dets,scale){
+function drawFrame(dets,scale,bootsDets){
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
   const {people,items}=analyzeEPP(dets);
+  if(bootsDets) mergeBoots(people,bootsDets);
   ctx.lineWidth=2;
   for(const it of items){ ctx.strokeStyle=it.present?"#00b4ff":"#ff2d2d";
     ctx.strokeRect(it.box[0]*scale,it.box[1]*scale,(it.box[2]-it.box[0])*scale,(it.box[3]-it.box[1])*scale); }
@@ -483,6 +516,7 @@ function drawFrame(dets,scale){
     let lbl=p.status==="incumple"?`#${p.id} SIN ${p.missing.join("/").toUpperCase()}`:(p.status==="verificando"?`#${p.id} verificando...`:`#${p.id} EPP OK`);
     const tw=ctx.measureText(lbl).width,ty=Math.max(y1-26,0);
     ctx.fillStyle=col; ctx.fillRect(x1-2,ty,tw+12,26); ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+4,ty+19); }
+  if(bootsDets) drawBoots(bootsDets);
   $("ndet").textContent=people.length;
   renderPanel(people.map(p=>({id:p.id,status:p.status,unknown:p.unknown,epp:Object.fromEntries(Object.entries(p.epp).map(([k,v])=>[k,v.present]))})));
 }
@@ -519,6 +553,37 @@ function drawFire(dets,scale=1){
   el.innerHTML = dets.length ? dets.map(d=>`<div class="card ${d.cls==="fire"?"incumple":"verificando"}"><div class="title">${FIRE_LABEL[d.cls]} — ${(d.score*100)|0}%</div></div>`).join("")
                              : '<div class="empty">Sin humo/fuego detectado</div>';
 }
+// ==== botines (input 896, 1 clase safety-boot; corre junto con EPP) ====
+const bpre=document.createElement("canvas"); bpre.width=BOOTS_INPUT; bpre.height=BOOTS_INPUT;
+const bpctx=bpre.getContext("2d",{willReadFrequently:true});
+async function ensureBootsModel(){
+  if(bootsSession) return;
+  setStatus("Cargando modelo de botines (36 MB)...");
+  try{ if(navigator.gpu){ bootsSession=await ort.InferenceSession.create(BOOTS_MODEL_URL,{executionProviders:["webgpu"],graphOptimizationLevel:"all"}); } }catch(e){ console.warn(e); }
+  if(!bootsSession){ bootsSession=await ort.InferenceSession.create(BOOTS_MODEL_URL,{executionProviders:["wasm"],graphOptimizationLevel:"all"}); }
+}
+function preprocessBoots(){
+  const vw=video.videoWidth,vh=video.videoHeight,r=Math.min(BOOTS_INPUT/vw,BOOTS_INPUT/vh);
+  const nw=Math.round(vw*r),nh=Math.round(vh*r);
+  bpctx.fillStyle="rgb(114,114,114)"; bpctx.fillRect(0,0,BOOTS_INPUT,BOOTS_INPUT); bpctx.drawImage(video,0,0,nw,nh);
+  const data=bpctx.getImageData(0,0,BOOTS_INPUT,BOOTS_INPUT).data, arr=new Float32Array(BOOTS_INPUT*BOOTS_INPUT*3), area=BOOTS_INPUT*BOOTS_INPUT;
+  for(let i=0;i<area;i++){ const j=i*4; arr[i]=data[j+2]; arr[area+i]=data[j+1]; arr[2*area+i]=data[j]; }
+  return {tensor:new ort.Tensor("float32",arr,[1,3,BOOTS_INPUT,BOOTS_INPUT]),r};
+}
+function postprocessBoots(out,r){  // 1 clase -> stride 6: [cx,cy,w,h,obj,cls]
+  const d=out.data,n=out.dims[1],stride=out.dims[2],boxes=[],scores=[];
+  for(let i=0;i<n;i++){ const o=i*stride,sc=d[o+4]*d[o+5]; if(sc<BOOTS_CONF) continue;
+    const cx=d[o],cy=d[o+1],w=d[o+2],h=d[o+3];
+    boxes.push([(cx-w/2)/r,(cy-h/2)/r,(cx+w/2)/r,(cy+h/2)/r]); scores.push(sc); }
+  return nms(boxes,scores,NMS).map(k=>({box:boxes[k],score:scores[k]}));
+}
+function drawBoots(dets){
+  ctx.lineWidth=3; ctx.font="bold 16px sans-serif";
+  for(const d of dets){ const [x1,y1,x2,y2]=d.box;
+    ctx.strokeStyle=BOOTS_COLOR; ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+    const lbl=`🥾 ${(d.score*100)|0}%`, tw=ctx.measureText(lbl).width, ty=Math.max(y1-20,0);
+    ctx.fillStyle=BOOTS_COLOR; ctx.fillRect(x1-2,ty,tw+8,20); ctx.fillStyle="#fff"; ctx.fillText(lbl,x1+2,ty+15); }
+}
 function sendFrameWS(){
   const vw=video.videoWidth,vh=video.videoHeight,sh=Math.round(vh*SEND_W/vw);
   jpg.width=SEND_W; jpg.height=sh; jctx.drawImage(video,0,0,SEND_W,sh); waitingReply=true;
@@ -534,7 +599,15 @@ async function loop(){
       const {tensor,r}=preprocess(); const t0=performance.now();
       const out=await activeSession.run({[activeSession.inputNames[0]]:tensor}); const t1=performance.now();
       if(detector==="fire") drawFire(postprocessFire(out[activeSession.outputNames[0]],r));
-      else drawFrame(postprocess(out[activeSession.outputNames[0]],r),1);
+      else {
+        let bootsDets=null;
+        if(bootsOn && bootsSession){
+          const bp=preprocessBoots();
+          const bo=await bootsSession.run({[bootsSession.inputNames[0]]:bp.tensor});
+          bootsDets=postprocessBoots(bo[bootsSession.outputNames[0]],bp.r);
+        }
+        drawFrame(postprocess(out[activeSession.outputNames[0]],r),1,bootsDets);
+      }
       $("inftime").textContent=(t1-t0).toFixed(0);
     }
   } else {
